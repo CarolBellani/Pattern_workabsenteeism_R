@@ -1,0 +1,3024 @@
+---
+title: "Patterning the impossible"
+date: "June 8, 2018"
+output:
+  html_document: default
+---
+
+```{r echo=FALSE,eval=TRUE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(error = TRUE)
+```
+
+We consider that it is extremely valuable to share our data analysis with the Data Science community to improve our field education and exchange feedback/comments. 
+
+###Let's get our hands 'dirty', then!
+Read the data set from the following link:
+
+https://archive.ics.uci.edu/ml/datasets/Absenteeism+at+work
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absenteeism_at_work <- read.csv("DATA/Absenteeism_at_work.csv", sep=";")
+```
+
+###Data preprocessing
+
+####Data cleaning and inconsistency
+
+There is a typo in one of the ID 29 because its personal information do not match with the remaining ID 29. We checked which ID matched with transport expense=225, Distance = 26, Service =9, Age=28, Education=1, Son=1, Social.smoker =0, Social.drinker, Pet=2, Weight=69, Height=169, Body mass=24, and the only possible ID was 28. So we changed in original data set that ID observation (in 52 row).
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absenteeism_at_work_29 <- subset (Absenteeism_at_work, Transportation.expense==225 & Distance.from.Residence.to.Work==26 & Service.time==9 & Age==28 & Education==1 & Social.drinker==0 & Social.smoker==0 & Pet==2 & Weight==69 & Height==169 & Body.mass.index==24)
+# all these characteristics only match with ID28, so we will correct this information.
+Absenteeism_at_work[52,1] <- 28 
+```
+
+There was some inconsistencies at rounding to integer the decimal number of body.mass.index, so we created a new var with the formula of BMI and decided to round with 2 decimal numbers.
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absenteeism_at_work$BMI <- round(Absenteeism_at_work$Weight/((Absenteeism_at_work$Height/100)^2),2)
+reorder <- Absenteeism_at_work[,c(1:19, 21, 20, 22)]
+```
+
+There is an inconsistent observation (row 135) that was removed because it is a case of absence of 0 hours for a reason.for.absence = 27 (Physiotherapy).
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absenteeism_at_work <- Absenteeism_at_work[-135,]
+```
+
+####New variables 
+* Freq.absence
+
+When the Reason.for.absence is different from 0 (0 corresponds to when that entry is relative to a disciplinary failure and not for absenteeism, except for ID 4,8,35 that have neither missed job), each row represent a missing day of a certain employee. 
+
+So, we created a new column called 'Freq.absence' which is the number of rows for each ID employee and created a new data set called 'Absenteeism':
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absenteeism_wthoutreason0 <- Absenteeism_at_work[!(Absenteeism_at_work$Reason.for.absence==0),] 
+
+freq <- as.data.frame(table(Absenteeism_wthoutreason0$ID)) #freq of the IDs that missed work
+colnames(freq)<- c("ID","Freq.absence")
+
+#Add the IDs that are missing and add a freq of 0 to allow to merge afterwards
+extra <- matrix(c(4,8,35,0,0,0),nrow=3,ncol=2)
+colnames(extra)<-c("ID","Freq.absence")
+
+#frequency of missing days for all IDs
+total <- rbind(extra, freq)
+
+#the freq of missing days should be the same as the quantity of lines taking out the 4,8,35 ID (so 696):
+sum(total$Freq.absence)
+
+#merge the freq with the complete dataset, so basically to add this new column in the dataset
+require(dplyr)
+Absenteeism <- merge(Absenteeism_at_work,total,by="ID",all.y=TRUE)
+``` 
+
+* Freq.failure
+
+For the cases that Reason is 0, the Disciplinary failure is 0 (for 3 cases) or 1 (40 cases).
+We created a new var called 'Freq.failure' which is the frequency of disciplinary failure for each individual.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+freq2 <- as.data.frame(table(Absenteeism$ID,Absenteeism$Disciplinary.failure)) 
+freq3 <- subset(freq2, Var2==1)
+freq4 <- subset (freq3, select=c(Var1,Freq))
+colnames(freq4)<- c("ID","Freq.failure")
+sum(freq4$Freq.failure) 
+
+#merge the freq with the complete dataset, so basically to add this new column in the dataset
+require(dplyr)
+Absenteeism_complete <- merge(Absenteeism,freq4,by="ID",all.y=TRUE)
+Absenteeism_complete$Freq.absence <- as.numeric(Absenteeism_complete$Freq.absence)
+```
+
+* Number.of.days.absent
+
+Converting the Work.load.Average.day (that is in minutes) to hours.
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absenteeism_withcatnames <- Absenteeism_complete
+Absenteeism_withcatnames$Hour.Work.load.Average.day <- Absenteeism_withcatnames$Work.load.Average.day/60
+```
+
+Number of days of work schedule that were missed. If your workload is 5 hours and you miss 25 hours, it means that you did not go to work 5 days of a week. 
+This variable indicates a different information than Freq.absence because this one gives the information of a long-term or short-term absence while Freq.absence gives the information of how many times you are being absent independently of the duration (short or long term).
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absenteeism_withcatnames$Number.of.days.absent <- (Absenteeism_withcatnames$Absenteeism.time.in.hours/Absenteeism_withcatnames$Hour.Work.load.Average.day)
+```
+
+* First.start
+
+To have the age of when the employee started work at the company we calculate first.start = Age - Service.time
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absenteeism_withcatnames$First.start <- Absenteeism_withcatnames$Age-Absenteeism_withcatnames$Service.time
+```
+
+* Reasons.for.absence.short
+
+1-21 are categories described by the International Code of Diseases (ICD-10, 2006): 
+
+  + 1: Certain infectious and parasitic diseases: 16 
+  + 2 Neoplasms (tumors): 1 
+  + 3: Diseases of the blood and blood-forming organs and certain disorders involving the immune mechanism: 1 
+  + 4: Endocrine, nutritional and metabolic diseases: 2 
+  + 5: Mental and behavioral disorders:3 
+  + 6: Diseases of the nervous system: 8 
+  + 7: Diseases of the eye and adnexa: 15 
+  + 8: Diseases of the ear and mastoid process: 6 
+  + 9: Diseases of the circulatory system: 4 
+  + 10: Diseases of the respiratory system: 25 
+  + 11: Diseases of the digestive system: 26  
+  + 12: Diseases of the skin and subcutaneous tissue: 8 
+  + 13: Diseases of the musculoskeletal system and connective tissue: 55 
+  + 14: Diseases of the genitourinary system: 19 (
+  + 15: Pregnancy, childbirth and the puerperium: 2  
+  + 16: Certain conditions originating in the perinatal period: 3  
+  + 17: Congenital malformations, deformations and chromosomal abnormalities: 1  
+  + 18: Symptoms, signs and abnormal clinical and laboratory findings, not elsewhere classified: 21 
+  + 19: Injury, poisoning and certain other consequences of external causes: 40 
+  + 20: External causes of morbidity and mortality: 0
+  + 21: Factors influencing health status and contact with health services: 6 
+  
+22-28 are not described by ICD:
+
+  + 22: Accompanying person for a patient: 38 
+  + 23: Medical consultation: 149 
+  + 24: Blood donation: 3
+  + 25: Laboratory examination: 31 
+  + 26: Unjustified absence: 33 
+  + 27: Physiotherapy: 68 
+  + 28: Dental consultation: 112 
+    
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table (Absenteeism_withcatnames$Reason.for.absence)
+```
+
+There is no absence due to reason 20.
+Reason 23 ('medical consultation') and 28 ('dental consultation') are the most frequent reasons. 
+Reason 2('Neoplasms'),3 ('Diseases of the blood and blood-forming organs and certain disorders involving the immune mechanism'),4 ('Endocrine, nutritional and metabolic diseases'),5('Mental and behavioral disorders'),9('Diseases of the circulatory system'),15('Pregnancy, childbirth and the puerperium'),16 ('Certain conditions originating in the perinatal period'),17('Congenital malformations, deformations and chromosomal abnormalities'),24('blood donation') are the least frequent reasons.
+
+Studying deeply the reasons (ICD), we could reduce the reasons to 10 categories.
+
+Possible shorter classification:
+
+Reason 1-14: Diseases (189)
+
+Reason 19: Injury, poisoning and certain other consequences of external causes (40)
+
+Reason 15-17: Pregnancy, childbirth, the puerperium, perinatal period and congenital
+
+malformations, deformations and chromosomal abnormalities  (6)
+
+Reason 18: Symptoms and abnormal exams (21)
+
+Reason 21,24,25: Diagnosis, donation and vaccination (40)
+
+Reason 22: Accompanying person for a patient (38)
+
+Reason 23: Medical consultation (149)
+
+Reason 26: Unjustified absence (33)
+
+Reason 27: Physiotherapy (68)
+
+Reason 28: Dental consultation (112)
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+library (car)
+Absenteeism_withcatnames$Reason.for.absence.short<-Recode(Absenteeism_withcatnames$Reason.for.absence,"c(1,2,3,4,5,6,7,8,9,10,11,12,13,14)='Diseases'; 18='Symptons and abnormal exams'; 19='Injury, poisoning'; c(15,16,17)='Pregnancy, childbirth, perinatal complications'; c(21,24,25)='Diagnosis, donation and vaccination'; 22='Accompanying person'; 23='Medical consultation'; 26='Unjustified';27='Physiotheraphy'; 28='Dental consultation'")
+table(Absenteeism_withcatnames$Reason.for.absence.short)
+```
+
+* Categorical variables with names instead of values 
+
+To be easier for interpretation and data visualization, we add the labels in the categorical variables.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#Day of the week
+Absenteeism_withcatnames$Day.of.the.week.nom<-factor (Absenteeism_withcatnames$Day.of.the.week, levels = 2:6, labels = c("Mon", "Tue", "Wed", "Thu", "Fri"))
+
+#Month of absence
+#there is 3 obs with month=0, I replace to NA.
+Absenteeism_withcatnames$Month.of.absence.nom<-factor (Absenteeism_withcatnames$Month.of.absence, levels = 0:12, labels = c("NA", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"))
+
+#Seasons
+#there is 3 obs with month=0, I replace to NA. 
+Absenteeism_withcatnames$Seasons.nom<-factor(Absenteeism_withcatnames$Seasons,levels=1:4, labels = c('Winter','Summer','Autumn','Spring'))
+
+#check if season and months make sense. In the file description the seasons are wrong essembled, the correct is 1='Winter';2='Summer';3='Autumn';4='Spring.
+table(Absenteeism_withcatnames$Month.of.absence.nom,Absenteeism_withcatnames$Seasons.nom)
+```
+
+Jun,March and Sept are repeated in two seasons because it is when the season changes on 21th, so the months can be both season, since we do not have the days of the month, we cannot check if it is well assembled the seasons. There is 3 NA that correspond to the 3 individuals that never skipped work.
+
+Obs. remember that we are in Brazil!
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#Education
+table(Absenteeism_withcatnames$Education)
+```
+
+There is only 4 observations for master's and doctor education, so we insert those observations together with the postgraduate observations. We have 3 categories, High School, Graduate and Postgraduate (that include post-graduation diploma, Master's and PhD).
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+library (car)
+Absenteeism_withcatnames$Education<-Recode(Absenteeism_withcatnames$Education,"3:4='3'")
+Absenteeism_withcatnames$Education<- ordered(Absenteeism_withcatnames$Education, levels = 1:3, labels = c("High School", "Graduate", "Postgraduate"))
+
+table(Absenteeism_withcatnames$Education)
+```
+
+* Bad.habits
+
+We combined the variable 'Social.drinker' and 'Social.smoker' in the categorical 'Bad.habits'.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absenteeism_withcatnames$Bad.habits <- paste(Absenteeism_withcatnames$Social.smoker,Absenteeism_withcatnames$Social.drinker)
+
+Absenteeism_withcatnames$Bad.habits<-Recode(Absenteeism_withcatnames$Bad.habits,"'0 0'='None';'1 1'='Both';'0 1'='Drinker';'1 0'='Smoker'")
+
+table (Absenteeism_withcatnames$Bad.habits)
+```
+
+
+####Data filtering
+This data is organized in two different occasions, when a employee is absent (696) or did a disciplinary failure (40) or when did not do any of the two (3) (the original data set had 743 rows but 1 row was a registration error).
+When the employee did a disciplinary failure or none of the two, that entry is registered as Reason.for.absence=0.
+We are only concerning about the observations about the absenteeism, so we filter the data set to have only those occasions, so 696 observations.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absenteeism_withcatnames_wth0 <- subset (Absenteeism_withcatnames, Reason.for.absence!=0, select=-c(Month.of.absence,Day.of.the.week,Seasons,Work.load.Average.day, Disciplinary.failure, Social.drinker, Social.smoker, Body.mass.index, Reason.for.absence))
+```
+
+###Description of the variables
+
+697 absent days.
+
+Categorical variables:
+
+* ID: ID of the 36 employees
+* Reason.for.absence.short: 10 reasons
+* Education: High School (572), Graduation (43), Postgraduate (82)
+* Day.of.the.week.nom: days of the week, from Monday to Friday
+* Month.of.absence.nom: months Jan-Dec
+* Seasons.nom: seasons of work, Summer (190), Autumn (169), Winter (164), Spring (174)
+* Bad habits: If an employee is a social drinker (374), social smoker (29), both (17) or none (277)
+
+Numerical variables:
+
+* Transportation.expense: travel costs from home to the work place in reais,min-max = 118-388 reais, average = 219.8 reais
+* Distance.from.Residence.to.Work: distance from home to work place in kilometers, min-max = 5-52 km, average = 26 km
+* Service.time: time while an employee has been working in the company in years, min-max = 1-29 years, average = 12.55 years
+* Age: age of the employees, min-max = 27-58 years old, average = 36.26 years old
+* Hit target: Percentage of goal reached, min-max = 81-100%, average = 94.72%
+* Son: Number of children an employee have, min-max = 0-4, average = 1.00
+* Pet: Number of pets an employee own, min-max = 0-8, average = 0.73
+* Weight: Weight of an employee in kilos, min-max = 56-108 Kg
+* Height: Height of an employee in centimeters, min-max = 163 - 196 cm, average = 172.1 cm
+* BMI: Weight in kg /(Height in m^2), min-max = 19.15 - 38.01, average = 26.58 kg/m^2
+* Freq.absence: number of times an employee was late or missed the job, min-max = 2-112 times, average = 47.37 times
+* Freq.failure: number of times an employee failed at the job, min-max = 2-6 times, average = 1.34 times 
+* First.start: age when an employee started at the company, min-max = 19-42 years old, average = 23.71
+* Hour.Work.load.Average.day: average number of hours that the employee works in a day, min-max = 3.4-6.3 hours, average = 4.5
+* Number of days absent: number of days absent, if less than 0, means it can be due of being late or missed part of the day, min-max = 0-30.24 days, average = 1.64 days.
+
+
+###Exploring the data
+In order to understand better the data we are dealing with, we check distribution, box plots, explore correlation and dependence of variables.
+
+####Histograms
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+par(mfrow=c(3,2))
+
+hist( Absenteeism_withcatnames_wth0$Transportation.expense, breaks = sqrt( length( Absenteeism_withcatnames_wth0$Transportation.expense ) ), probability = TRUE,
+      col = 'lavender', main = 'Transportation.expense', xlab = 'Transportation.expense' ) 
+boxplot(Absenteeism_withcatnames_wth0$Transportation.expense) #585,586 rows (id31)
+
+
+hist( Absenteeism_withcatnames_wth0$Distance.from.Residence.to.Work, breaks = sqrt( length( Absenteeism_withcatnames_wth0$Distance.from.Residence.to.Work ) ), probability = TRUE,
+      col = 'lavender', main = 'Distance.from.Residence.to.Work', xlab = 'Distance.from.Residence.to.Work' ) 
+boxplot(Absenteeism_withcatnames_wth0$Distance.from.Residence.to.Work)
+
+
+hist( Absenteeism_withcatnames_wth0$Service.time, breaks = sqrt( length( Absenteeism_withcatnames_wth0$Service.time ) ), probability = TRUE,
+      col = 'lavender', main = 'Service.time', xlab = 'Service.time' ) 
+boxplot(Absenteeism_withcatnames_wth0$Service.time) #587, 588, 598, 590,591 (ID32)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+par(mfrow=c(3,2))
+
+hist( Absenteeism_withcatnames_wth0$Age, breaks = sqrt( length( Absenteeism_withcatnames_wth0$Age ) ), probability = TRUE,
+      col = 'lavender', main = 'Age', xlab = 'Age' ) 
+boxplot(Absenteeism_withcatnames_wth0$Age) #165 /6/7/8/9/70/71/72 (ID9)
+
+
+hist( Absenteeism_withcatnames_wth0$Son, breaks = sqrt( length( Absenteeism_withcatnames_wth0$Son ) ), probability = TRUE,
+      col = 'lavender', main = 'Son', xlab = 'Son' )
+boxplot(Absenteeism_withcatnames_wth0$Son)
+
+hist( Absenteeism_withcatnames_wth0$Pet, breaks = sqrt( length( Absenteeism_withcatnames_wth0$Pet ) ), probability = TRUE,
+      col = 'lavender', main = 'Pet', xlab = 'Pet' ) 
+boxplot(Absenteeism_withcatnames_wth0$Pet)#ID 12,2,10,23
+
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+par(mfrow=c(3,2))
+
+hist( Absenteeism_withcatnames_wth0$Weight, breaks = sqrt( length( Absenteeism_withcatnames_wth0$Weight ) ), probability = TRUE,
+      col = 'lavender', main = 'Weight', xlab = 'Weight' ) 
+boxplot(Absenteeism_withcatnames_wth0$Weight)
+
+hist( Absenteeism_withcatnames_wth0$Height, breaks = sqrt( length( Absenteeism_withcatnames_wth0$Height ) ), probability = TRUE,
+      col = 'lavender', main = 'Height', xlab = 'Height' ) 
+boxplot(Absenteeism_withcatnames_wth0$Height)# ID 14, 30, 29, 18, 12, 36, 25, 31
+
+hist( Absenteeism_withcatnames_wth0$BMI, breaks = sqrt( length( Absenteeism_withcatnames_wth0$BMI ) ), probability = TRUE,
+      col = 'lavender', main = 'BMI', xlab = 'BMI' )
+boxplot(Absenteeism_withcatnames_wth0$BMI)
+
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+par(mfrow=c(3,2))
+
+hist( Absenteeism_withcatnames_wth0$Freq.absence, breaks = sqrt( length( Absenteeism_withcatnames_wth0$Freq.absence) ), probability = TRUE,
+      col = 'lavender', main = 'Freq.absence', xlab = 'Freq.absence' ) 
+boxplot(Absenteeism_withcatnames_wth0$Freq.absence)
+
+hist( Absenteeism_withcatnames_wth0$Freq.failure, breaks = sqrt( length( Absenteeism_withcatnames_wth0$Freq.failure ) ), probability = TRUE,
+      col = 'lavender', main = 'Freq.failure', xlab = 'Freq.failure' )
+boxplot(Absenteeism_withcatnames_wth0$Freq.failure) #ID 36
+
+hist( Absenteeism_withcatnames_wth0$First.start, breaks = sqrt( length( Absenteeism_withcatnames_wth0$First.start ) ), probability = TRUE,
+      col = 'lavender', main = 'First.start', xlab = 'First.start' ) 
+boxplot(Absenteeism_withcatnames_wth0$First.start) #id 9 , 31
+
+
+
+```
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+par(mfrow=c(3,2))
+hist( Absenteeism_withcatnames_wth0$Hit.target, breaks = sqrt( length( Absenteeism_withcatnames_wth0$Hit.target ) ), probability = TRUE,
+      col = 'lavender', main = 'Hit.target', xlab = 'Hit target' )
+boxplot(Absenteeism_withcatnames_wth0$Hit.target)  #691,152,452,462,285,293,316,317,41,43,46,102,106,375,213 (it changes so it is not for ID)
+
+hist( Absenteeism_withcatnames_wth0$Absenteeism.time.in.hours, breaks = sqrt( length( Absenteeism_withcatnames_wth0$Absenteeism.time.in.hours ) ), probability = TRUE,
+      col = 'lavender', main = 'Absenteeism.time.in.hours', xlab = 'Absenteeism.time.in.hours' )
+boxplot(Absenteeism_withcatnames_wth0$Absenteeism.time.in.hours) #if >24 outliers
+#table(Absenteeism_withcatnames_wth0$Absenteeism.time.in.hours)
+
+hist( Absenteeism_withcatnames_wth0$Hour.Work.load.Average.day, breaks = sqrt( length( Absenteeism_withcatnames_wth0$Hour.Work.load.Average.day ) ), probability = TRUE,
+      col = 'lavender', main = 'Hour.Work.load.Average.day', xlab = 'Hour.Work.load.Average.day' )
+boxplot(Absenteeism_withcatnames_wth0$Hour.Work.load.Average.day) #533,589,280,105,56,4,173,477,451,449,466,445,311,683,693,685,574,255,263,262,498,82,61, 78,199,2017,183,669
+
+
+
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+par(mfrow=c(1,2))
+hist( Absenteeism_withcatnames_wth0$Number.of.days.absent, breaks = sqrt( length( Absenteeism_withcatnames_wth0$Number.of.days.absent ) ), probability = TRUE,
+      col = 'lavender', main = 'Number.of.days.absent', xlab = 'Number.of.days.absent' ) 
+boxplot(Absenteeism_withcatnames_wth0$Number.of.days.absent) #same as absenteeism time in hours
+```
+
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+par(mfrow=c(4,2))
+
+Absenteeism_withcatnames_wth0$ID=as.factor(Absenteeism_withcatnames_wth0$ID)
+Absenteeism_withcatnames_wth0$Bad.habits=as.factor(Absenteeism_withcatnames_wth0$Bad.habits)
+
+
+#str(Absenteeism_withcatnames_wth0)
+barplot(table(Absenteeism_withcatnames_wth0$Day.of.the.week.nom),
+      col = 'lavender')
+
+barplot(table(Absenteeism_withcatnames_wth0$Month.of.absence.nom),
+      col = 'lavender')
+
+barplot(table(Absenteeism_withcatnames_wth0$Seasons.nom),
+      col = 'lavender')
+
+barplot(table(Absenteeism_withcatnames_wth0$Bad.habits),
+      col = 'lavender')
+
+barplot(table(Absenteeism_withcatnames_wth0$Education),
+      col = 'lavender')
+
+barplot(table(Absenteeism_withcatnames_wth0$ID),
+      col = 'lavender')
+
+barplot(table(Absenteeism_withcatnames_wth0$Reason.for.absence),
+      col = 'lavender')
+
+```
+
+####Q-Q plots
+```{r eval=FALSE}
+Absent2=Absenteeism_withcatnames_wth0
+
+#Transportation.expense
+qqnorm (Absent2$Transportation.expense)
+qqline (Absent2$Transportation.expense)
+
+#Distance.from.Residence.to.Work
+qqnorm (Absent2$Distance.from.Residence.to.Work)
+qqline (Absent2$Distance.from.Residence.to.Work)
+
+#Service.time
+qqnorm (Absent2$Service.time)
+qqline (Absent2$Service.time)
+
+#Age
+qqnorm (Absent2$Age)
+qqline (Absent2$Age)
+
+#Hit.target
+qqnorm (Absent2$Hit.target)
+qqline (Absent2$Hit.target)
+
+#Son
+qqnorm (Absent2$Son)
+qqline (Absent2$Son)
+
+#Pet
+qqnorm (Absent2$Pet)
+qqline (Absent2$Pet)
+
+#Weight
+qqnorm (Absent2$Weight)
+qqline (Absent2$Weight)
+
+#Height
+qqnorm (Absent2$Height)
+qqline (Absent2$Height)
+
+#BMI
+qqnorm (Absent2$BMI)
+qqline (Absent2$BMI)
+
+#Absenteeism.time.in.hours
+qqnorm (Absent2$Absenteeism.time.in.hours)
+qqline (Absent2$Absenteeism.time.in.hours)
+
+#Freq.absence
+qqnorm (Absent2$Freq.absence)
+qqline (Absent2$Freq.absence)
+
+#Hour.Work.load.Average.day
+qqnorm (Absent2$Hour.Work.load.Average.day)
+qqline (Absent2$Hour.Work.load.Average.day)
+
+#Number.of.days.absent
+qqnorm (Absent2$Number.of.days.absent)
+qqline (Absent2$Number.of.days.absent)
+
+#Freq.failure
+qqnorm (Absent2$Freq.failure)
+qqline (Absent2$Freq.failure)
+
+#First.start
+qqnorm (Absent2$First.start)
+qqline (Absent2$First.start)
+```
+
+####Subset Variable numerical and categorical
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absent2=Absenteeism_withcatnames_wth0
+#Numerical
+Absent2.num <- subset (Absent2, select=c(Transportation.expense,Distance.from.Residence.to.Work,Service.time,Age,Hit.target,Son,Pet,Weight,Height,BMI,Absenteeism.time.in.hours,Freq.absence,Hour.Work.load.Average.day,Number.of.days.absent,Freq.failure,First.start))
+#Categorical
+Absent2.cat <- subset (Absent2, select=-c(Transportation.expense,Distance.from.Residence.to.Work,Service.time,Age,Hit.target,Son,Pet,Weight,Height,BMI,Absenteeism.time.in.hours,Freq.absence,Hour.Work.load.Average.day,Number.of.days.absent,Freq.failure,First.start))
+```
+
+####Correlations
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absent2.num.scaled <- scale(Absent2.num, center=TRUE, scale=TRUE)
+
+library(knitr)
+#Pearson correlation
+corvarPearson <- round(cor(Absent2.num.scaled),2)
+corvarPearson[corvarPearson > -0.5 & corvarPearson < 0.5] <- NA
+#View(corvarPearson)
+
+#Spearman correlation
+corvarSpearman <- round(cor(Absent2.num.scaled, method="spearman"),2)
+corvarSpearman[corvarSpearman > -0.5 & corvarSpearman < 0.5] <- NA
+#View(corvarSpearman)
+
+library(corrplot)
+par(mfrow=c(1,2))
+CorrMatrix <- data.matrix(Absent2.num.scaled)
+corrplot(cor(CorrMatrix), diag = FALSE, order = "FPC", tl.pos = "td", tl.cex = 0.7, method ="color", type = "upper",number.cex = .6)
+
+corrplot(cor(CorrMatrix, method="spearman"), diag = FALSE, order = "FPC", tl.pos = "td", tl.cex = 0.7, method = "color", type = "upper",number.cex = .6)
+
+```
+
+* Service and Age are positively correlated (Pearson's correlation = 0.68 and Spearman = 0.78)
+* Age and First.start are positively correlated (Pearson's correlation = 0.70 and Spearman = 0.57)
+* Weight and BMI are positively correlated (Pearson's correlation = 0.90 and Spearman = 0.88)
+* Absenteeism.time.in.hours and Number.of.days.absent are positively correlated (Pearson's correlation = 0.98 and Spearman = 0.97)
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+require(car)
+Absent2.num.scaled.corr <- subset(Absent2.num.scaled, select= c(Service.time, Age, First.start, Weight, BMI, Absenteeism.time.in.hours, Number.of.days.absent))
+scatterplotMatrix(Absent2.num.scaled.corr)
+```
+
+####Removing possible outliers
+
+Rare values can create bias in further analysis by appearing to be more important than they really are. For this reason, we performed an analysis in the variables which could change for the same ID: otherwise, we will lose a relatively huge amount of data.
+Hit.target, Absenteeism.time.in.hours, Hour.Work.load.Average.day, Number.of.days.absent are the variables analyzed.
+In particular, Number.of.days.absent is really high positively correlated with the hours, then to detect outliers for them is possible to consider just one of them.
+
+The outliers detected by IQR's method of the three variables Hit.target, Absenteeism.time.in.hours, Hour.Work.load.Average.day were around 11%:
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+par(mfrow=c(1,3))
+boxplot(Absenteeism_withcatnames_wth0$Hit.target, main='Hit.target')
+boxplot(Absenteeism_withcatnames_wth0$Absenteeism.time.in.hours, main='Absenteeism.time.in.hours')
+boxplot(Absenteeism_withcatnames_wth0$Hour.Work.load.Average.day, main='Hour.Work.load.Average.day')
+
+Absenteeism_withcatnames_wth0Hit=subset(Absenteeism_withcatnames_wth0, Absenteeism_withcatnames_wth0$Hit.target>85)
+Absenteeism_withcatnames_wth0HitHourAbs=subset(Absenteeism_withcatnames_wth0Hit, Absenteeism_withcatnames_wth0Hit$Absenteeism.time.in.hours<=20 )
+Absenteeism_withcatnames_wth0HitHourAbsWorkLoad=subset(Absenteeism_withcatnames_wth0HitHourAbs, Absenteeism_withcatnames_wth0HitHourAbs$Hour.Work.load.Average.day<6.0)
+#dim(Absenteeism_withcatnames_wth0HitHourAbsWorkLoad)
+
+#(696-616)/696
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absent2.num.scaled=as.data.frame(Absent2.num.scaled)
+require(scatterplot3d)
+scatterplot3d(Absent2.num.scaled$Absenteeism.time.in.hours, Absent2.num.scaled$Hour.Work.load.Average.day, Absent2.num.scaled$Hit.target, xlab='Absenteeism.time.in.hours',ylab='Hour.Work.load.Average.day',zlab='Hit.target', grid=TRUE, box=TRUE)
+
+```
+
+Since these three variables are not correlated, it is possible to see, for example, that for the same value of Work.load.average.day a point can be an outlier for Absenteeism.time.in.hours and for Hit.target or/and not.
+In particular, if you can read the plot better in 2d:
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+layout(matrix(c(2,0,1,3),nrow=2,byrow=T), widths=c(2,1),heights=c(1,2),respect=T)
+plot(Absenteeism_withcatnames_wth0$Absenteeism.time.in.hours, Absenteeism_withcatnames_wth0$Hour.Work.load.Average.day, xlab='Absenteeism.time.in.hours',ylab='Hour.Work.load.Average.day') 
+hist( Absenteeism_withcatnames_wth0$Absenteeism.time.in.hours, breaks = sqrt( length( Absenteeism_withcatnames_wth0$Absenteeism.time.in.hours ) ), probability = TRUE,
+      col = 'lavender', main = '', xlab = '' )
+boxplot(Absenteeism_withcatnames_wth0$Hour.Work.load.Average.day) 
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+layout(matrix(c(2,0,1,3),nrow=2,byrow=T), widths=c(2,1),heights=c(1,2),respect=T)
+plot(Absenteeism_withcatnames_wth0$Hit.target, Absenteeism_withcatnames_wth0$Hour.Work.load.Average.day, xlab='Hit.target',ylab='Hour.Work.load.Average.day') 
+hist( Absenteeism_withcatnames_wth0$Hit.target, breaks = sqrt( length( Absenteeism_withcatnames_wth0$Hit.target ) ), probability = TRUE,
+      col = 'lavender', main = '', xlab = '' )
+boxplot(Absenteeism_withcatnames_wth0$Hour.Work.load.Average.day) 
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+layout(matrix(c(2,0,1,3),nrow=2,byrow=T), widths=c(2,1),heights=c(1,2),respect=T)
+plot(Absenteeism_withcatnames_wth0$Absenteeism.time.in.hours, Absenteeism_withcatnames_wth0$Hit.target, xlab='Absenteeism.time.in.hours',ylab='Hit.target') 
+hist( Absenteeism_withcatnames_wth0$Absenteeism.time.in.hours, breaks = sqrt( length( Absenteeism_withcatnames_wth0$Absenteeism.time.in.hours ) ), probability = TRUE,
+      col = 'lavender', main = '', xlab = '' )
+boxplot(Absenteeism_withcatnames_wth0$Hit.target) 
+```
+
+Saying this, we considered as outliers Hit.target<85 and Absenteeism.time.in.hours>48, corresponding to 4,1% of the data set.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absent_outliers <- Absenteeism_withcatnames_wth0
+
+#take out the outliers:
+Absent_outliers=subset(Absent_outliers, Absent_outliers$Hit.target>85) #-15 rows
+
+Absent_outliers=subset(Absent_outliers, Absent_outliers$Absenteeism.time.in.hours<=48 ) #-14 rows
+
+(15+14)/696
+
+```
+
+It is not possible to apply the bi-variate (Hit.target and Absenteeism.time.in.hours) plot with the two ellipses, neither the convex hull or stalac since those variables are numeric *discrete*.
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#controling the outliers removed:
+Absent_outliersRemoved <- Absenteeism_withcatnames_wth0
+Absent_outliersRemovedHit=subset(Absent_outliersRemoved , Absent_outliersRemoved $Hit.target<=85)
+Absent_outliersRemovedHour=subset(Absent_outliersRemoved,Absent_outliersRemoved$Absenteeism.time.in.hours>48)
+```
+
+####Pearson's chi-square test
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#Qui-square
+#str(Absent2.cat)
+
+chisq <- table(Absent2.cat$ID, Absent2.cat$Reason.for.absence.short)
+chisq.test(chisq) 
+#ID and Reason for absence are dependent
+
+chisq2 <- table(Absent2.cat$ID, Absent2.cat$Education)
+chisq.test(chisq2) 
+#ID and Education are dependent
+
+chisq3 <- table(Absent2.cat$ID, Absent2.cat$Day.of.the.week.nom)
+chisq.test(chisq3) 
+#ID and Day.of.the.week.nom are dependent
+
+chisq4 <- table(Absent2.cat$ID, Absent2.cat$Month.of.absence.nom)
+chisq.test(chisq4)
+#ID and Month.of.absence.nom are dependent
+
+chisq5 <- table(Absent2.cat$ID, Absent2.cat$Seasons.nom)
+chisq.test(chisq5) 
+#ID and Seasons.nom are dependent
+
+chisq6 <- table(Absent2.cat$ID, Absent2.cat$Bad.habits)
+chisq.test(chisq6) 
+#ID and Bad.habits are dependent
+
+chisq7 <- table(Absent2.cat$Reason.for.absence.short, Absent2.cat$Education)
+chisq.test(chisq7)
+#Reason.for.absence.short and Education are dependent
+
+chisq8 <- table(Absent2.cat$Reason.for.absence.short, Absent2.cat$Day.of.the.week.nom)
+chisq.test(chisq8)
+#Reason.for.absence.short and Day.of.the.week.nom are dependent
+
+chisq9 <- table(Absent2.cat$Reason.for.absence.short, Absent2.cat$Month.of.absence.nom)
+chisq.test(chisq9)
+#Reason.for.absence.short and Month.of.absence.nom are dependent
+
+chisq10 <- table(Absent2.cat$Reason.for.absence.short, Absent2.cat$Seasons.nom)
+chisq.test(chisq10)
+#Reason.for.absence.short and Seasons.nom are dependent
+
+chisq11 <- table(Absent2.cat$Reason.for.absence.short, Absent2.cat$Bad.habits)
+chisq.test(chisq11)
+#Reason.for.absence.short and Bad.habits are dependent
+
+chisq12 <- table(Absent2.cat$Education, Absent2.cat$Day.of.the.week.nom)
+chisq.test(chisq12)
+#Education and Day of the week.nom are independent
+
+chisq13 <- table(Absent2.cat$Education, Absent2.cat$Month.of.absence.nom)
+chisq.test(chisq13)
+#Education and Month.of.absence.nom are independent
+
+chisq14 <- table(Absent2.cat$Education, Absent2.cat$Seasons.nom)
+chisq.test(chisq14)
+#Education and Seasons.nom are independent
+
+chisq15 <- table(Absent2.cat$Education, Absent2.cat$Bad.habits)
+chisq.test(chisq15)
+#Education and Bad.habits are dependent
+
+chisq16 <- table(Absent2.cat$Day.of.the.week.nom, Absent2.cat$Month.of.absence.nom)
+chisq.test(chisq16)
+#Day.of.the.week.nom and Month.of.absence.nom are independent
+
+chisq17 <- table(Absent2.cat$Day.of.the.week.nom, Absent2.cat$Seasons.nom)
+chisq.test(chisq17)
+#Day.of.the.week.nom and seasons.nom are independent
+
+chisq18 <- table(Absent2.cat$Day.of.the.week.nom, Absent2.cat$Bad.habits)
+chisq.test(chisq18)
+#Day.of.the.week.nom and Bad.habits are independent
+
+chisq19 <- table(Absent2.cat$Month.of.absence.nom, Absent2.cat$Seasons.nom)
+chisq.test(chisq19)
+#Month.of.absence.nom and Season.nom are dependent
+
+chisq20 <- table(Absent2.cat$Month.of.absence.nom, Absent2.cat$Bad.habits)
+chisq.test(chisq20)
+#Month.of.absence.nom and Bad.habits are dependent
+
+chisq21 <- table(Absent2.cat$Seasons.nom, Absent2.cat$Bad.habits)
+chisq.test(chisq21)
+#Seasons.nom and Bad.habits are independent.
+```
+
+```{r echo=FALSE,eval=TRUE, warning=FALSE, message=FALSE}
+library(knitr)
+library(kableExtra)
+row1 <- c("", "", "","","","","","")
+row2 <- c("", "", "","","","","","")
+row3 <- c("", "Dependent", "","","","","","")
+row4 <- c("", "Dependent", "Dependent", "","","","", "")
+row5 <- c("", "Dependent", "Dependent", "Independent","","","","") 
+row6 <- c("", "Dependent", "Dependent", "Independent", "Independent", "","","")
+row7 <-  c("","Dependent","Dependent","Independent","Independent","Dependent","","")
+row8 <- c("","Dependent","Dependent","Dependent","Independent","Dependent","Independent","" )
+chisqresult <- rbind(row1,row2,row3,row4,row5,row6,row7,row8)
+row.names(chisqresult)<- c("", "ID", "Reason.for.absence.short", "Education", "Day.of.the.week.nom", "Month.of.absence.nom", "Seasons.nom", "Bad.habits")
+colnames(chisqresult)<- c("", "ID", "Reason.for.absence.short", "Education", "Day.of.the.week.nom", "Month.of.absence.nom", "Seasons.nom", "Bad.habits")
+kable (chisqresult)
+```
+
+###Feature Selection
+
+Considering the correlation, we decide to select to not consider Age because it is high positively correlated with both Service.time and First.start. We selected BMI and Absenteeism.time.in.hour because they are more relevant variables for the study.
+We selected all the categorical variables, because none of them seem to be independent.
+
+###Main goal of the Multiple Correspondence Analysis
+
+Our goal is to understand the pattern of the reason for absenteeism considering the different employee characteristics, Day of the week and Season.
+
+Our hypothesis are that the employees with higher rate of absenteeism would be:
+
+* Older employees.
+* Higher body mass index (high or obese)
+* Having children or pet(s).
+* Living farer away from the workplace.
+* Higher transportation expenses.
+* With bad habits (smoker or drinker or both).
+
+In relation to the day and season, we expect to have more absence on:
+
+* Extreme seasons like Summer and Winter.
+
+###Multiple Correspondence Analysis
+
+####Discretized the continuous variables
+
+Certain basic principles are generally followed for clustering or MCA, regardless of the
+discretization method used [@Data-Mining-and-Statistics-for-Decision-Making]:
+
+* Avoid having too many differences in the numbers of classes between one variable and
+another.
+* Avoid having too many different class sizes for each variable.
+* About 4 or 5 classes is often found to be a good number.
+ Especially avoid having classes that are too small.
+
+
+* Body Mass Index (BMI) is considered:
+
+    + Normal: $<25$ kg/^2^
+    + High: $25-29$ kg/m^2^
+    + Obese: $\geq30$ kg/m^2^
+    
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+library(car)
+Absent2$Body.mass.cat<-Recode(Absent2$BMI,"19.15:24.99='Normal';25:29.99='High';30:38.01='Obese'")
+table (Absent2$Body.mass.cat)
+```
+
+* Transportation.expense.disc
+
+We discretized the variable by having a equal frequency between the following four levels:
+  + Between 118 and 178 reais
+  + Between 179 and 224 reais
+  + Between 225 and 259 reais
+  + Between 260 and 388 reais
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table (Absent2$Transportation.expense)
+require('arules')
+Absent2$Transportation.expense.disc <- discretize (Absent2$Transportation.expense, method = "frequency", breaks=4)
+
+table(Absent2$Transportation.expense.disc)
+```
+
+* Pet.disc
+
+We discretized the variable to have 4 levels:
+  + No pet
+  + 1 pet
+  + 2 pets
+  + more than 4 pets
+  
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table (Absent2$Pet)
+require('car')
+#having no pet, 1 pet, 2 pets and more than 4.
+Absent2$Pet.disc<-Recode(Absent2$Pet,"0='No pet';1='One pet';2='Two pets';4:8='More than 4'")
+table(Absent2$Pet.disc)
+```
+
+* Freq.failure.disc
+
++ 0: no failure
++ 1
++ 2-6
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+hist(Absent2$Freq.failure)
+Absent2$Freq.failure.disc <- discretize(Absent2$Freq.failure, breaks=3, method="frequency")
+table(Absent2$Freq.failure.disc)
+```
+
+* Distance.from.Residence.to.Work.disc
+
++ 5-15 km 
++ 16-25 km
++ 26-49 km
++ 50-52 km
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#Distance.from.Residence.to.Work
+Absent2$Distance.from.Residence.to.Work <- as.numeric(Absent2$Distance.from.Residence.to.Work)
+Absent2$Distance.from.Residence.to.Work.disc <- discretize(Absent2$Distance.from.Residence.to.Work, breaks=4, method="frequency")
+table(Absent2$Distance.from.Residence.to.Work.disc)
+```
+
+* Service.time.disc
+
++ 1-8 years
++ 9-10 years
++ 11-13 years
++ 14-17 years
++ 18-29 years
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#Service.time
+Absent2$Service.time <- as.numeric(Absent2$Service.time)
+Absent2$Service.time.disc <- discretize(Absent2$Service.time, breaks=5, method="frequency")
+table(Absent2$Service.time.disc)
+```
+
+* Hour.Work.load.Average.day.disc
+
++ 3.43 - 3.98 average hours
++ 3.99 - 4.21 average hours
++ 4.22 - 4.45 average hours
++ 4.46 - 5.10 average hours
++ 5.11 - 6.31 average hours
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#Work.load.Average.day
+Absent2$Hour.Work.load.Average.day.disc <- discretize(Absent2$Hour.Work.load.Average.day, breaks=5, method="frequency")
+table(Absent2$Hour.Work.load.Average.day.disc)
+```
+
+* Hit.target.disc
+
++ 87-91%
++ 92-93%
++ 94-95%
++ 96-97%
++ 98-100%
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#Hit target
+Absent2$Hit.target.disc <- discretize(Absent2$Hit.target, breaks=5, method="frequency")
+table(Absent2$Hit.target.disc)
+```
+
+* Freq.absence.disc
+
++ 2-22 absences
++ 23-37 absences
++ 38-74 absences
++ 75-112 absences
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#Freq.absence
+Absent2$Freq.absence.disc <- discretize(Absent2$Freq.absence, breaks=4, method="frequency")
+table (Absent2$Freq.absence.disc)
+```
+
+* Son.disc
+
++ 0 child
++ 1 child
++ 2 children
++ more than 3 children
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#Son
+table (Absent2$Son)
+Absent2$Son.disc<-Recode(Absent2$Son,"0='No child';1='One child';2='Two children';3:4='More than 3 children'")
+table (Absent2$Son.disc)
+```
+
+* First.start.disc
+
++ 19 years old
++ 20-24 years old
++ 25-42 years old
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#First.start.disc
+Absent2$First.start.disc <- discretize(Absent2$First.start, breaks=3, method="frequency")
+table (Absent2$First.start.disc)
+#Absent2$Absenteeism.time.in.hours
+```
+
+* Absenteeism time in hours disc
+
++ 1 hour
++ 2 hours
++ 3-7 hours
++ More than 8 hours
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#Absenteeism.time.in.hours.disc
+Absent2$Absenteeism.time.in.hours.disc <- discretize(Absent2$Absenteeism.time.in.hours, breaks=4, method="frequency")
+table (Absent2$Absenteeism.time.in.hours.disc)
+```
+
+
+####Subset the dataset
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+MCAdata <- subset(Absent2, select=-c(ID,Transportation.expense, Distance.from.Residence.to.Work, Service.time, Age, Hit.target, Son, Pet, Weight, Height, Absenteeism.time.in.hours, BMI, Freq.absence, Freq.failure, First.start, Hour.Work.load.Average.day, Number.of.days.absent))
+
+library(FactoMineR)
+
+#str(MCAdata)
+MCAdata$Body.mass.cat <- as.factor(MCAdata$Body.mass.cat)
+MCAdata$Pet.disc <- as.factor(MCAdata$Pet.disc)
+MCAdata$Son.disc <- as.factor(MCAdata$Son.disc)
+```
+
+####ALL DATA: Number of dimensions
+
+We decide to discretize all variables and explore this analysis using all variables.
+
+* Number of levels
+Education:3
+Day.of.the.week:5
+Month.of.absence:12
+Seasons:4
+Bad.habits:4
+Reason.for.absence:10
+Body.mass.cat:3
+Transportation.expense:4
+Pet.disc:4
+Freq.failure:3
+Distance:4
+Service.time:5
+Hour.Work.load.Average.day.disc:5
+Hit.target:5
+Freq.absence.disc:4
+Son.disc:4
+First.start.disc:3
+Absenteeism.time.in.hours:4
+
+
+Maximum dimensions:
+3+5+12+4+4+10+3+4+4+3+4+5+5+5+4+4+3+4=86 dimensions
+86-18=68 dimensions
+(1/dimensions)*100=1.47 => 25 dimensions
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+library(FactoMineR)
+res.mca <- MCA (MCAdata, ncp=68, graph=TRUE)
+library(factoextra)
+eig.val <- get_eigenvalue(res.mca)
+res.mca <- MCA (MCAdata, ncp=25, graph=TRUE) #18 dimensions
+fviz_screeplot(res.mca, addlabels=TRUE)
+```
+
+####11 variables: Number of dimensions
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+MCAdata2 <- subset(Absent2, select=-c(Month.of.absence.nom,Transportation.expense.disc,Distance.from.Residence.to.Work.disc, Service.time.disc, Hour.Work.load.Average.day.disc,Hit.target.disc, First.start.disc,ID,Transportation.expense, Distance.from.Residence.to.Work, Service.time, Age, Hit.target, Son, Pet, Weight, Height, Absenteeism.time.in.hours, BMI, Freq.absence, Freq.failure, First.start, Hour.Work.load.Average.day, Number.of.days.absent))
+
+MCAdata2$Body.mass.cat <- as.factor(MCAdata2$Body.mass.cat)
+MCAdata2$Pet.disc <- as.factor(MCAdata2$Pet.disc)
+MCAdata2$Son.disc <- as.factor(MCAdata2$Son.disc)
+
+str(MCAdata2)
+```
+
+* Number of levels:
+Education:3
+Day.of.week:5
+Season:4
+Bad.habit:4
+Reasons:10
+Body.mass:3
+Pet:4
+Freq.failure:4
+Freq.absence:4
+Son:4
+Absenteeism.time:4
+
+* Number of dimensions
+3+5+4+4+10+3+4+3+4+4+4=48
+48-11=37
+Eigenvalue:
+(1/37)*100=2.7027% => 15 dimensions
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+res.mca <- MCA (MCAdata2, ncp=37, graph=TRUE)
+res.mca$eig
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+library(factoextra)
+eig.val <- get_eigenvalue(res.mca)
+
+#15 dimensions
+res.mca <- MCA (MCAdata2, ncp=15, graph=TRUE) 
+
+#Data visualization
+library(factoextra)
+fviz_mca_var(res.mca)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+
+get.cos2 <- get_mca_var(res.mca)$cos2
+fviz_contrib(res.mca, choice="var", top=20)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+fviz_screeplot(res.mca, addlabels=TRUE)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+fviz_cos2(res.mca, choice="var", top=20, axes=1:2)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#summary(res.mca)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+fviz_mca_var(res.mca, choice="mca.cor", repel=TRUE, ggtheme=theme_minimal())
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#fviz_mca_var(res.mca, repel=TRUE, ggtheme=theme_minimal())
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+
+#fviz_mca_var(res.mca)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+fviz_mca_var(res.mca, choice="var.cat", col.var="black")
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#per observation
+ind <- get_mca_ind(res.mca)
+#ind
+#fviz_mca_ind(res.mca, col.var="cos2", gradient.cols=c("#32CD32", "#FFD700", "#FF0000"), repel=TRUE, ggtheme=theme_minimal())
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#cos2
+fviz_cos2(res.mca, choice="ind", axes=1:2, top=20)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#contribution
+fviz_contrib(res.mca, choice="ind", axes=1:2, top=20)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+fviz_mca_ind(res.mca, label="none", habillage = "Seasons.nom", addEllipses = TRUE, ellipse.type="confidence", ggtheme=theme_minimal())
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+
+fviz_ellipses(res.mca, c("Seasons.nom","Day.of.the.week.nom","Bad.habits", "Education", "Body.mass.cat", "Pet.disc", "Son.disc", "Absenteeism.time.in.hours.disc", "Reason.for.absence.short"), geom="point")
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#dimension description
+res.desc <- dimdesc (res.mca, axes= c(1,2))
+#res.desc[[1]]
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#Graphs for the poster:
+#change names
+colnames(MCAdata2) <- c('Education','Week day', 'Seasons', 'Bad habits', 'Reasons', 'BMI', 'Pet', 'Failure frequency', 'Absence frequency',  'Children', 'Absenteeism time')
+
+res.mca <- MCA (MCAdata2, ncp=15, graph=TRUE) 
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+library(ggsci)
+
+#fviz_ellipses(res.mca,  axes = c(1, 2), ellipse.type = "confidence" , ggtheme = theme_bw(), c("Seasons.nom","Day.of.the.week.nom","Bad.habits", "Education", "Body.mass.cat", "Pet.disc", "Son.disc", "Absenteeism.time.in.hours", "Reason.for.absence.short"), geom="point")
+fviz_ellipses(res.mca,repel=TRUE, axes=c(1,2), ellipse.type = "confidence", c('Education','Week day', 'Seasons', 'Bad habits', 'Reasons', 'BMI', 'Pet', 'Failure frequency', 'Absence frequency',  'Children', 'Absenteeism time'),geom="point")
+#fviz_ellipses(res.mca,repel=TRUE, axes=c(1,2),ggtheme=theme_minimal,ellipse.type = "confidence", c('Education','Week day', 'Seasons', 'Bad habits', 'Reasons', 'BMI', 'Pet', 'Failure frequency', 'Absence frequency',  'Children', 'Absenteeism time'),geom="point")
+```
+
+#####Making the Hierarchical clustering
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+library("NbClust")
+# Elbow method
+fviz_nbclust(res.mca$ind$coord, hcut, method = "wss", diss=get_dist(res.mca$ind$coord, method="spearman")) +
+    #geom_vline(xintercept = 4, linetype = 2)+
+  labs(subtitle = "Elbow method")
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# Silhouette method
+fviz_nbclust(res.mca$ind$coord, hcut, method = "silhouette", diss=get_dist(res.mca$ind$coord, method="spearman") )+
+  labs(subtitle = "Silhouette method")
+```
+The Elbow and Sillouette suggest 4 clusters.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+
+res.hcpc = HCPC(res.mca,nb.clust=4)
+
+fviz_cluster(res.hcpc, repel=TRUE, show.clust.cent = TRUE, palette="NULL", ggtheme=theme_minimal(), geom="point")
+
+```
+
+
+####Just categoricals: Number of dimensions
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+MCAdata3 <- subset(Absent2, select=c(Education, Day.of.the.week.nom, Seasons.nom, Bad.habits, Reason.for.absence.short, Body.mass.cat))
+
+MCAdata3$Body.mass.cat <- as.factor(MCAdata3$Body.mass.cat)
+
+str(MCAdata3)
+```
+Education:3
+Day.of.week:5
+Season:4
+Bad.habit:4
+Reasons:10
+Body.mass:3
+
+
+* Number of dimensions
+3+5+4+4+10+3=29
+29-6=23
+Eigenvalue:
+(1/23)*100=4.348% => 10 dimensions
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+res.mca <- MCA (MCAdata3, ncp=23, graph=TRUE)
+res.mca$eig
+library(factoextra)
+eig.val <- get_eigenvalue(res.mca)
+
+#10 dimensions
+res.mca <- MCA (MCAdata3, ncp=10, graph=TRUE) 
+```
+
+
+Same result as using the previous 11 variables. 
+
+
+## Principal component, Factor and Cluster Analysis
+
+###Reasons and goals of the analysis
+
+We use the methods to explore whether previously clusters may exist in the data set.
+We used in this analysis the original numerical variables we have in our disposal.
+The choice of considering only numerical ones follows from the fact that we want to perform PCA before, and use its output as input for the clustering methods.
+It could be possible perform cluster analysis using mixed variables with packages that performs the distance also between categorical variables but since our goal is to use the information of the PCA we didn't choose this road.
+
+We standardize before because of the different scales of measurements: the goal is to make the variables comparable.
+We will not consider Work.load.Average.day but Hour.Work.load.Average.day, because the description of it could be simpler.
+
+We will consider the cleaned data set. In fact, the goal of this section is to find clusters which describe the observations regarding the absenteeism hours. For example: Cluster1, 5 hours: tot sons, tot pets, tot failures ecc...
+
+In conclusion, the variables selected are: Freq.failure, Transportation.expense, Distance.from.Residence.to.Work, Service.Time, Age, Hit.target, Son, Pet, Weight, Height, BMI, Freq.absence, Hour.work.load.Average.day, Number.of.fays.absent,First.Start (15 variables).
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absenteeism_Clustering=Absent_outliers
+#str(Absenteeism_Clustering)
+AbsenteeismCont=subset(Absenteeism_Clustering, select=-c(ID, Month.of.absence.nom, Seasons.nom,  Education,   Bad.habits, Day.of.the.week.nom, Reason.for.absence.short))
+
+#str(AbsenteeismCont)
+
+AbsenteeismCont_Norm=scale(AbsenteeismCont, center=TRUE, scale=TRUE)
+```
+
+###Pre-selection 
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+
+AbsenteeismCont_Norm_presel <- subset(AbsenteeismCont_Norm, select=-c(Weight,Number.of.days.absent, Age, Absenteeism.time.in.hours))#WITHOUT aBSENTEEISM.TIME.IN.HOURS
+AbsenteeismCont_Norm_presel=as.data.frame(AbsenteeismCont_Norm_presel)
+str(AbsenteeismCont_Norm_presel)
+
+```
+
+###Principal Component Analysis
+
+Now, the PCA using these 12 variables.
+
+To perform PCA we use first the command "princomp" and after, we compare the results of the command "PCA" [FactoMineR package].
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+xnorm.pca <- princomp(AbsenteeismCont_Norm_presel,cor=TRUE, scores = TRUE) #scores=TRUE
+summary(xnorm.pca) #to compare with PCA command
+
+#considering the % of variance explained, screeplot
+#plot(xnorm.pca, type = "l", main="Elbow plot")
+```
+
+It seems there is a Elbow in Component 4.
+But considering the % of explained variance and the value of the eigenvalues:
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+library("FactoMineR")
+res.pca=PCA(AbsenteeismCont_Norm_presel, ncp = 12, graph = FALSE)
+library("factoextra")
+
+fviz_eig(res.pca, addlabels = TRUE, ylim = c(0, 50))
+
+```
+
+And in particular:
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+eig.val <- get_eigenvalue(res.pca)
+eig.val
+```
+
+Comparing princcomp and PCA have the same results, as we were expecting.
+
+Considering that an eigenvalue > 1 indicates that PCs account for more variance than accounted by one of the original variables in standardized data. This is commonly used as a cutoff point for which PCs are retained. This holds true only when the data are standardized, as our case. 
+
+So considering this the number as cutoff, the number of dimensions should be 5, but the explained variance is only 70%. But considering until dimension 9 can be better for the variance, also if the scree plot shows an elbow in 4, but the variance at 4 is around  61. 
+
+We believe that consider 9 variables could be a good idea, but let's see the contributions to be sure.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#code to save the scores that we will need later in the clustering analysis
+mat=xnorm.pca$scores
+#dim(mat)
+matcomp9=mat[, 1:9]
+
+```
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+xnorm.pca$loadings #results princcomp command. NB: the compenents are standardized! we can consider the loading relatively to the component but not absolutely. it is normal that SS loadings is equal to 1
+
+```
+
+Considering the loadings and its interpretation, looking to the histograms contribution:
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# Contributions of variables to PC1
+fviz_contrib(res.pca, choice = "var", axes = 1, top = 12)
+# Contributions of variables to PC2
+fviz_contrib(res.pca, choice = "var", axes = 2, top = 12)
+
+fviz_contrib(res.pca, choice = "var", axes = 3, top = 13)
+
+fviz_contrib(res.pca, choice = "var", axes = 4, top = 12)
+
+fviz_contrib(res.pca, choice = "var", axes = 5, top = 12)
+
+fviz_contrib(res.pca, choice = "var", axes = 6, top = 12)
+
+fviz_contrib(res.pca, choice = "var", axes = 7, top = 12)
+
+fviz_contrib(res.pca, choice = "var", axes = 8, top = 12)
+
+fviz_contrib(res.pca, choice = "var", axes = 9, top = 12)
+
+fviz_contrib(res.pca, choice = "var", axes = 10, top = 12)
+
+fviz_contrib(res.pca, choice = "var", axes = 11, top = 12)
+
+fviz_contrib(res.pca, choice = "var", axes = 12, top = 12)
+
+
+
+```
+
+Component 1: -0.522 Freq.failure, -0.425 Service.time
+
+Component2: 0.586 Distance.from.Residence.to.work, -0.452 Height
+
+Component3: 0.555 Freq.failure, 0.449 First.start, 0.448 BMI
+
+Component4: -0.627 Hour.Work.load.Average.day, -0.464 Son
+
+Component5: -0.915 Hit.target
+
+Component6: 0.637 Hour.Work.load.Average.day
+
+Component7: -0.758 Height
+
+Component8: -0.720 Freq.failure
+
+Component9: -0.641 Transportation.expense
+
+Component10: 0.575 Distance.from.residence.to work, 0.451 First.start
+
+Component11: 0.601 Service time, -0.451 BMI
+
+Component12: 0.686 Freq.absence
+
+The components are confused.
+
+Summarizing:
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+library("corrplot")
+corrplot(res.pca$var$contrib, is.corr=FALSE)
+```
+
+Until component 5, as suggested from the value of the eigenvalue, there is a vast explanation. But, also the components from 6 to 9, as the %explained variance suggested, are very important regarding some variables. We expected to lose some information regarding  Service.time and Freq.absence since they are contributing in the component 11 and component 12.
+Since the goal is not only to consider orthogonal variables, but also to reduce (from 12 to 9 is not a big reduction but still) we will consider only the 9 components.
+
+The total contribution of the first 9 principal components is:
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+fviz_contrib(res.pca, choice = "var", axes = 1:9, top = 12)
+```
+
+Also if components not considered better explained some variables, overall the total contribution seems to consider well all the variables!
+We can see the most contribute variable is "hit target", followed by "Hour.work.load.average.day" and "Freq.failure". 
+
+More analysis of PCA results considering cos2:
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+library("corrplot")
+corrplot(res.pca$var$cos2, is.corr=FALSE)
+```
+ 
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# Total cos2 of variables on Dim.1/ dim 9
+fviz_cos2(res.pca, choice = "var", axes = 1:9)
+```
+
+
+
+Note that, a high cos2 indicates a good representation of the variable on the principal component. In this case the variable is positioned close to the circumference of the correlation circle. 
+A low cos2 indicates that the variable is not perfectly represented by the PCs. In this case the variable is close to the center of the circle. 
+
+The cos2 values are used to estimate the quality of the representation 
+The closer a variable is to the circle of correlations, the better its representation on the factor map (and the more important it is to interpret these components) 
+Variables that are closed to the center of the plot are less important for the first components. 
+variables with low cos2 values will be colored in "white"
+variables with mid cos2 values will be colored in "blue"
+variables with high cos2 values will be colored in red
+but we will considered two components, so remember to pay attention to not interpret these results are general.
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# Color by cos2 values: quality on the factor map
+fviz_pca_var(res.pca, col.var = "cos2",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), 
+             repel = TRUE # Avoid text overlapping
+             )
+
+```
+
+###Factor Analysis
+Since the interpretation of the loadings of the principal components are confused, we decide to perform factor analysis. In fact, at the end of it, it is possible to rotate with the command "varmax" to have a clear interpretation.
+As we saw in the classes, to extract the factors we will use principal component factoring method.
+As principal component analysis, we will use the continuous and pre-selected variables; like this, we could compare principal components and factors and decide which ones to use in the future.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#str(AbsenteeismCont_Norm_presel)
+R=cor(AbsenteeismCont_Norm_presel)
+library(psych) 
+KMO(R)
+
+```
+
+Because of the theory, we know KMO 0.9 marvelous KMO 0.8 meritorious KMO 0.7 middling KMO 0.6 mediocre KMO 0.5 miserable KMO < 0.5 unacceptable. The overall MSA is 0.51 and some variables have <0.5.
+We will try to perform anyway but we know it is not the appropriate way.
+
+As we knew already from PCA:
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#eigen(R)
+plot(eigen(R)$values, type="b")
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+perc_explained<-eigen(R)$values/12
+cum_explain<-cumsum(perc_explained)
+table<-cbind(eigenvalue=eigen(R)$values,perc_explained,cum_explain)
+table
+```
+
+The number of unique parameters in R are (13x14)/2=78, and considering five factors we reduce to: 5x13+13=72. Considering m=9 factors, similar to PCA, doesn't have sense.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+(12*13)/2
+5*12+12
+9*12+12
+```
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+D<-matrix(rep(0,(12*12)),nrow=12) 
+diag(D)<-sqrt(eigen(R)$values)
+loadings<-eigen(R)$vectors%*%D 
+rownames(loadings)<-names(AbsenteeismCont_Norm_presel) 
+loadings[,1:5]
+
+
+Communalities<-matrix(rep(0,13),nrow=13)
+Communalities[1]<-sum(loadings[1,1:5]^2)
+Communalities[2]<-sum(loadings[2,1:5]^2)
+Communalities[3]<-sum(loadings[3,1:5]^2)
+Communalities[4]<-sum(loadings[4,1:5]^2)
+Communalities[5]<-sum(loadings[5,1:5]^2)
+Communalities[6]<-sum(loadings[6,1:5]^2)
+Communalities[7]<-sum(loadings[7,1:5]^2)
+Communalities[8]<-sum(loadings[8,1:5]^2)
+Communalities[9]<-sum(loadings[9,1:5]^2)
+Communalities[10]<-sum(loadings[10,1:5]^2)
+Communalities[11]<-sum(loadings[11,1:5]^2)
+Communalities[12]<-sum(loadings[12,1:5]^2)
+
+
+Communalities[13]<-sum(Communalities)
+rownames(Communalities)<-c(names(AbsenteeismCont_Norm_presel),"total")
+Communalities
+
+
+# Sum of communalities id equal to the sum of eigenvalues
+sum(eigen(R)$values[1:5]) #total of communalities check
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#Factor model
+#R= L T(L) + FI
+Psi<-matrix(rep(0,12*12),nrow=12)
+diag(Psi)<-c(1,1,1,1,1,1,1,1,1,1,1,1)-Communalities[1:12]  
+#Psi
+
+
+Residual_R<-R-loadings[,1:5]%*%t(loadings[,1:5])-Psi
+#dimnames(Residual_R)<-names(AbsenteeismCont_Fact)
+Residual_R  #part not explained by the model
+```
+
+The residual matrix is close to 0, seems the part not explained by the model is small.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+varimax(loadings[,1:5])
+```
+
+Factor1: -0.817 Service.time, 0.718 Pet
+
+Factor2: 0.877 Distance.from.Residence.to.Work, 0.678 Freq.absence
+
+Factor3: 0.800 Son, 0.704 Freq.failure
+
+Factor4: -0.685 Hour.Work.load.Average.day, 0.620 First.start
+
+Factor5: -0.932 Hit.target
+
+Since the interpretation is still confused and the cumulative var is only 0.656 and moreover, the KMO were not appropriate... we will use the principal components as inputs for our clustering.
+
+###Clustering techniques
+
+Now we proceed with the clustering methods. As we know from the theory, the distance is a crucial part for this analysis. Euclidean distance is not appropriate since the variability of the variables is small. Distances rank-based are better in this case.
+
+
+Kendall distance: https://en.wikipedia.org/wiki/Kendall_tau_distance
+
+Spearman distance: https://en.wikipedia.org/wiki/Spearman%27s_rank_correlation_coefficient 
+
+
+###Number of clusters
+We will show the Elbow, Silhouette and Gap statistics methods.
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+library("NbClust")
+library(FactoMineR)
+library(factoextra)
+# Elbow method
+fviz_nbclust(matcomp9, hcut, method = "wss", diss=get_dist(matcomp9, method="spearman")) +
+    #geom_vline(xintercept = 4, linetype = 2)+
+  labs(subtitle = "Elbow method")
+```
+
+It seems there is not an "elbow" point. Three and seven could be considered.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# Silhouette method
+fviz_nbclust(matcomp9, hcut, method = "silhouette", diss=get_dist(matcomp9, method="spearman") )+
+  labs(subtitle = "Silhouette method")
+```
+
+Silhouette suggested at 10 (max number of clusters allowed), but there are some speaks also in 3 and 7 as Elbow suggested.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# Gap statistic
+# nboot = 50 to keep the function speedy. 
+# recommended value: nboot= 500 for your analysis.
+# Use verbose = FALSE to hide computing progression.
+set.seed(123)
+fviz_nbclust(matcomp9, hcut, nstart = 25,  method = "gap_stat", nboot = 50, diss=get_dist(matcomp9, method="spearman"))+
+  labs(subtitle = "Gap statistic method")
+```
+
+Difficult to say something looking to the silhouette method.
+
+
+From these three is difficult to conclude the right number: but or 3 and 7 are possible candidates.
+
+It could be nice to use the command NbClust, but since the function of it has some problems when you give as input a dissimilarity matrix without a data matrix, we couldn't (check it with the teacher!).
+
+###Grouping the hours
+
+Because the goal is to control if the clustering groups well considering the absenteeism hours, in the way we can describe better the data set in groups, we need to group the hours. During the cluster analysis, we will consider if the clusters have a good classification regarding low and high hours. 
+To group the hours, we remind the distribution of the absenteeism hours without outliers:
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+par(mfrow=c(1,2))
+barplot(table(AbsenteeismCont$Absenteeism.time.in.hours),  col = 'lavender')
+
+boxplot(AbsenteeismCont$Absenteeism.time.in.hours)
+
+#table(AbsenteeismCont$Absenteeism.time.in.hours)
+#median(AbsenteeismCont$Absenteeism.time.in.hours) 3
+#mean(AbsenteeismCont$Absenteeism.time.in.hours) 5.59
+
+```
+
+We can consider these 3 groups, as histogram suggests and as we considered for MCA.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+for(i in 1:667){
+  if(AbsenteeismCont$Absenteeism.time.in.hours[i]<2) {AbsenteeismCont$Hoursgroup[i]="1hours"}
+  if(AbsenteeismCont$Absenteeism.time.in.hours[i]>=2 && AbsenteeismCont$Absenteeism.time.in.hours[i]<3 ){AbsenteeismCont$Hoursgroup[i]="2hours"}
+  if(AbsenteeismCont$Absenteeism.time.in.hours[i]>=3 && AbsenteeismCont$Absenteeism.time.in.hours[i]<8 ){AbsenteeismCont$Hoursgroup[i]="midtimeinhours"}
+  if(AbsenteeismCont$Absenteeism.time.in.hours[i]>=8){AbsenteeismCont$Hoursgroup[i]="lotofhours" }
+}
+
+AbsenteeismCont$Hoursgroup=as.factor(AbsenteeismCont$Hoursgroup)
+barplot(table(AbsenteeismCont$Hoursgroup),  col = 'lavender')
+```
+
+
+
+##Clustering algorithms
+ 
+Fixed 3 or 7 as numbers of clusters, We decided to act like this:
+-hierarchical methods: complete, single, average and ward with 3 clusters
+-partitioning methods: K-means with 3 clusters and K-Medoids with 3 clusters and after, with 7 clusters.
+
+We will consider as distances the Spearman and Kendall ones.
+
+###Hierarchical
+Compute the Spearman and Kendall distances:
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#d<-dist(matcomp9)
+# Kendall and Spearman 
+library(factoextra)
+
+dSpearm=get_dist(matcomp9, method = "spearman")
+
+dKend=get_dist(matcomp9, method = "kendall")
+```
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+fviz_dist(dSpearm)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+fviz_dist(dKend)
+```
+
+* WARD METHOD
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#ward method Spearman
+fit_ward<-hclust(dSpearm,method="ward.D")
+plot(fit_ward)
+rect.hclust(fit_ward, k=3,border="red") 
+groups_wardSpearm <- cutree(fit_ward, k=3)
+
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+AbsenteeismCont$groups_wardSpearm<-groups_wardSpearm  #create the column the the clusters of ward
+table(groups_wardSpearm)
+table(AbsenteeismCont$Hoursgroup,AbsenteeismCont$groups_wardSpearm)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,AbsenteeismCont$groups_wardSpearm)
+```
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#ward method Kendall
+fit_ward<-hclust(dKend,method="ward.D")
+plot(fit_ward)
+rect.hclust(fit_ward, k=3,border="red") 
+groups_wardKend <- cutree(fit_ward, k=3)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+AbsenteeismCont$groups_wardKend<-groups_wardKend  #create the column the the clusters of ward
+table(groups_wardKend)
+table(AbsenteeismCont$Hoursgroup,AbsenteeismCont$groups_wardKend)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,AbsenteeismCont$groups_wardKend)
+
+```
+
+
+ 
+* SINGLE LINKAGE
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# single linkage Spearman
+fit_single<-hclust(dSpearm, method="single")
+plot(fit_single)
+rect.hclust(fit_single, k=3, border="red")
+groups_singleSpearm <- cutree(fit_single, k=3)
+AbsenteeismCont$groups_singleSpearm<-groups_singleSpearm
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(groups_singleSpearm) 
+table(AbsenteeismCont$Hoursgroup,groups_singleSpearm)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,AbsenteeismCont$groups_singleSpearm)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# single linkage
+fit_single<-hclust(dKend, method="single")
+plot(fit_single)
+rect.hclust(fit_single, k=3, border="red")
+groups_singleKend <- cutree(fit_single, k=3)
+AbsenteeismCont$groups_singleKend<-groups_singleKend
+```
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(groups_singleKend) 
+table(AbsenteeismCont$Hoursgroup,groups_singleKend)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,AbsenteeismCont$groups_singleKend)
+```
+
+
+* COMPLETE LINKAGE
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# complete linkage spearman
+fit_complete<-hclust(dSpearm, method="complete")
+plot(fit_complete)
+rect.hclust(fit_complete, k=3, border="red")
+groups_completeSpearm <- cutree(fit_complete, k=3)
+AbsenteeismCont$groups_completeSpearm<-groups_completeSpearm
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(groups_completeSpearm) 
+table(AbsenteeismCont$Hoursgroup,groups_completeSpearm)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,groups_completeSpearm)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# complete linkage kendal
+fit_complete<-hclust(dKend, method="complete")
+plot(fit_complete)
+rect.hclust(fit_complete, k=3, border="red")
+groups_completeKend <- cutree(fit_complete, k=3)
+AbsenteeismCont$groups_completeKend<-groups_completeKend
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(groups_completeKend) 
+table(AbsenteeismCont$Hoursgroup,groups_completeKend)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,groups_completeKend)
+```
+
+* AVERAGE LINKAGE
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# average linkage spearman
+fit_average<-hclust(dSpearm, method="average")
+plot(fit_average)
+rect.hclust(fit_average, k=3, border="red")
+groups_averageSpearm <- cutree(fit_average, k=3)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(groups_averageSpearm) 
+AbsenteeismCont$groups_averageSpearm<-groups_averageSpearm
+table(AbsenteeismCont$Hoursgroup,groups_averageSpearm)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,groups_averageSpearm)
+```
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# average linkage kendal
+fit_average<-hclust(dKend, method="average")
+plot(fit_average)
+rect.hclust(fit_average, k=3, border="red")
+groups_averageKend <- cutree(fit_average, k=3)
+
+```
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(groups_averageKend) 
+AbsenteeismCont$groups_averageKend<-groups_averageKend
+ 
+table(AbsenteeismCont$Hoursgroup,groups_averageKend)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,groups_averageKend)
+```
+
+* CENTROID LINKAGE
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# centroid method spearman
+fit_centroid<-hclust(dSpearm, method="centroid")
+plot(fit_centroid)
+rect.hclust(fit_centroid, k=3, border="red")
+groups_centroidSpearm <- cutree(fit_centroid, k=3)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(groups_centroidSpearm)
+
+AbsenteeismCont$groups_centroidSpearm<-groups_centroidSpearm
+ 
+table(AbsenteeismCont$Hoursgroup,groups_centroidSpearm)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,groups_centroidSpearm)
+```
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# centroid method kendal
+fit_centroid<-hclust(dKend, method="centroid")
+plot(fit_centroid)
+rect.hclust(fit_centroid, k=3, border="red")
+groups_centroidKend <- cutree(fit_centroid, k=3)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(groups_centroidKend)
+
+AbsenteeismCont$groups_centroidKend<-groups_centroidKend
+ 
+table(AbsenteeismCont$Hoursgroup,groups_centroidKend)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,groups_centroidKend)
+```
+
+All the hierarchical methods don't help to discriminate between low and high absenteeism hours.
+But we keep Complete linkage with Kendall distance and Average linkage with Kennedy distance, and we compare them:
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+library(dendextend)
+# Create multiple dendrograms by chaining
+dend_complete <- matcomp9 %>% get_dist(method = "kendall") %>% hclust("complete") %>% as.dendrogram
+dend_average <- matcomp9 %>% get_dist(method = "kendall") %>% hclust("average") %>% as.dendrogram
+dend_completeS <- matcomp9 %>% get_dist(method = "spearman") %>% hclust("complete") %>% as.dendrogram
+
+
+# Compute correlation matrix
+dend_list <- dendlist("Complete" = dend_complete, 
+                      "Average" = dend_average, "CompleteS" = dend_completeS)
+
+cors <- cor.dendlist(dend_list)
+# Print correlation matrix
+round(cors, 2)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+
+library(corrplot)
+corrplot(cors, "pie", "lower")
+
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+tanglegram(dend_complete, dend_average)
+```
+The two methods, as also the correlation said, are discordant between them.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+entanglement(dend_complete, dend_average)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+dend_list <- dendlist(dend_complete, dend_average)
+# Cophenetic correlation matrix
+cor.dendlist(dend_list, method = "cophenetic")
+```
+
+we want close to 1 as much as possible, and we have 0.74.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# Baker correlation matrix
+cor.dendlist(dend_list, method = "baker")
+```
+
+0.51 estimation lower than Cophenetic and in a worst way.
+
+###Partitioning algorithms
+
+Now we will apply k-means and k-medoids and compare the results, we expect the k-medoids method be more accurate in general.
+
+* KMEANS, with 3 clusters
+ 
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+clk=kmeans(matcomp9, 3, iter.max = 100, nstart =2365 ,    
+           algorithm = c("Hartigan-Wong", "Lloyd", "Forgy", "MacQueen"),  trace=FALSE)
+
+#clk
+```
+
+Looking that between_SS / total_SS =  31.4 % %
+
+Considering the relevance of each variable for the discrimination in clusters:
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+AbsenteeismCont$clusterKM<-as.factor(clk$cluster)
+
+#str(AbsenteeismCont) #1 to 15, 17
+summary(aov(AbsenteeismCont[,1]~AbsenteeismCont$clusterKM,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,2]~AbsenteeismCont$clusterKM,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,3]~AbsenteeismCont$clusterKM,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,4]~AbsenteeismCont$clusterKM,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,5]~AbsenteeismCont$clusterKM,data=AbsenteeismCont)) #no, Hit.target
+summary(aov(AbsenteeismCont[,6]~AbsenteeismCont$clusterKM,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,7]~AbsenteeismCont$clusterKM,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,8]~AbsenteeismCont$clusterKM,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,9]~AbsenteeismCont$clusterKM,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,10]~AbsenteeismCont$clusterKM,data=AbsenteeismCont)) #no, Absenteeism.time.in.hours
+summary(aov(AbsenteeismCont[,11]~AbsenteeismCont$clusterKM,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,12]~AbsenteeismCont$clusterKM,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,13]~AbsenteeismCont$clusterKM,data=AbsenteeismCont)) 
+summary(aov(AbsenteeismCont[,14]~AbsenteeismCont$clusterKM,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,15]~AbsenteeismCont$clusterKM,data=AbsenteeismCont))#no, Hour.Work.load.Average.day
+summary(aov(AbsenteeismCont[,16]~AbsenteeismCont$clusterKM,data=AbsenteeismCont))#No, Number.of.days.absent
+
+```
+In general p-value 0, that means that the belonging in the cluster is signicative along the 16 variables. Less significant difference is with some variables: hit target, absenteeism in hours, hour work load average day and absents' days.
+
+This result could be considered already negative for our analysis, since we wanted that the clusters could discriminate between low and high hours of absence, but the p value is 0.0311.
+
+Without considering some of them, but considering absenteeism.time.in.hours anyway, we performed a description of the clusters:
+ 
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+CL_Means_KM<-matrix(rep(0,(13*3)),nrow=13)
+#str(AbsenteeismCont)
+#dim(AbsenteeismCont)
+rownames(CL_Means_KM)<-names(AbsenteeismCont)[-c(5,15,16,17:28)]
+colnames(CL_Means_KM)<-c("CL1","CL2", "CL3") 
+
+
+CL_Means_KM[,1]<-round(colMeans(subset(AbsenteeismCont,clusterKM==1)[,-c(5,15,16,17:28)]),2) 
+CL_Means_KM[,2]<-round(colMeans(subset(AbsenteeismCont,clusterKM==2)[,-c(5,15,16,17:28)]),2)
+CL_Means_KM[,3]<-round(colMeans(subset(AbsenteeismCont,clusterKM==3)[,-c(5,15,16,17:28)]),2)
+CL_Means_KM
+```
+
+CL1: high transportation expense, low service time, low age, quite high number of sons and pet, not the highest freq.absence but the highest freq.failure
+
+CL2: high distance from residence to work, high service time, no son, high BMI and highest Freq.absence.
+
+CL3: low distance from residence to work, oldest
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(AbsenteeismCont$clusterKM,AbsenteeismCont$Hoursgroup)
+table(AbsenteeismCont$clusterKM,AbsenteeismCont$Absenteeism.time.in.hours)
+```
+
+From the p-values but also for the table, we can not really link clusters and hours. But we can just say that cluster 2 usually has less absent people and these people are: quite far from work, highest service time, oldest, don't have son and pet but have an high freq.absence. Then, probably they skip work often but just for an average of 4.20hours.
+
+Arriving at this point, we asked if it could be possible to see also if the clustering explains the reason of absence:
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(Absenteeism_Clustering$Reason.for.absence.short,AbsenteeismCont$clusterKM )
+
+```
+
+And we can just say that CL2 use physiotherapy as reason mostly, and never accompanying person, injury, poisoning and pregnancy stuffs.
+It could make sense since they don't have son and they are the oldest.
+
+All the results should be "taken them with a grain of sal".
+
+* K-MEDOIDS
+
+Because it is possible that the cleaned data set still has some outliers, we believe the K-medoids algorithm will be more accurate because less influenced by the presence of outliers. The difference between K-means and K-medoids consists in this: K-means consider a non existing point as centroid, K-medoids consider the centroid by the one of the points located near the center of the cluster.
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+library(fpc)
+clmSpearm=pamk(dSpearm, k=3, criterion="asw", usepam=TRUE,
+         scaling=FALSE, alpha=0.001, diss=TRUE,
+         critout=FALSE, ns=10, seed=NULL) 
+#clm$pamobject$medoids
+#clm$pamobject$clustering
+#clm$pamobject$id.med
+
+
+```
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(clmSpearm$pamobject$clustering)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+clmKen=pamk(dKend, k=3, criterion="asw", usepam=TRUE,
+         scaling=FALSE, alpha=0.001, diss=TRUE,
+         critout=FALSE, ns=10, seed=NULL) 
+
+#clmKen
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(clmKen$pamobject$clustering)
+```
+
+Proceeding doing the same things we did for k-means technique:
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+
+AbsenteeismCont$clusterKMed<-as.factor(clmSpearm$pamobject$clustering)
+#str(AbsenteeismCont)
+
+summary(aov(AbsenteeismCont[,1]~AbsenteeismCont$clusterKMed,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,2]~AbsenteeismCont$clusterKMed,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,3]~AbsenteeismCont$clusterKMed,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,4]~AbsenteeismCont$clusterKMed,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,5]~AbsenteeismCont$clusterKMed,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,6]~AbsenteeismCont$clusterKMed,data=AbsenteeismCont)) 
+summary(aov(AbsenteeismCont[,7]~AbsenteeismCont$clusterKMed,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,8]~AbsenteeismCont$clusterKMed,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,9]~AbsenteeismCont$clusterKMed,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,10]~AbsenteeismCont$clusterKMed,data=AbsenteeismCont)) #no, Absenteeism.time.in.hours
+summary(aov(AbsenteeismCont[,11]~AbsenteeismCont$clusterKMed,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,12]~AbsenteeismCont$clusterKMed,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,13]~AbsenteeismCont$clusterKMed,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,14]~AbsenteeismCont$clusterKMed,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,15]~AbsenteeismCont$clusterKMed,data=AbsenteeismCont)) #no, Hour.Work.load.Average.day
+summary(aov(AbsenteeismCont[,16]~AbsenteeismCont$clusterKMed,data=AbsenteeismCont)) #no, Number.of.days.absent
+
+
+```
+
+The belonging of the clustering is not significant for: absents' hours and days and hour.work.load.average.day.
+Also in this case, it is a negative result that the belonging of the cluster doesn't discriminate in Absenteeism.time.in.hours (p-value=0.0118)
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+fviz_cluster(object=list(data=AbsenteeismCont_Norm_presel, cluster=clmSpearm$pamobject$clustering), repel=TRUE, show.clust.cent=TRUE , palette="NULL",ggthem=theme_minimal(), main="K-medoids with Spearman Distance of the PC", geom=c("point"), ellipse=TRUE)
+
+```
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+CL_Means_KMed<-matrix(rep(0,(3*14)),nrow=14)
+#str(AbsenteeismCont)
+#dim(AbsenteeismCont)
+rownames(CL_Means_KMed)<-names(AbsenteeismCont)[-c(15,16,17:29)]
+colnames(CL_Means_KMed)<-c("CL1","CL2","CL3")
+
+CL_Means_KMed[,1]<-round(colMeans(subset(AbsenteeismCont,clusterKMed==1)[,-c(15,16,17:29)]),2) 
+CL_Means_KMed[,2]<-round(colMeans(subset(AbsenteeismCont,clusterKMed==2)[,-c(15,16,17:29)]),2)
+CL_Means_KMed[,3]<-round(colMeans(subset(AbsenteeismCont,clusterKMed==3)[,-c(15,16,17:29)]),2)
+
+CL_Means_KMed
+```
+
+CL1: Highest transportation.expense, high number of sons an pets, low freq.absence, high freq.failure
+
+CL2: Lowest distance, low freq.failure
+
+CL3: Highest distance, highest freq.absence
+
+
+Comparing with K-means:
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+CL_Means_KM
+```
+
+
+The two algorithms agree in some descriptions:
+
+* the people with highest absenteeism hours have low freq.absence, high freq.failure, high transportation expense and sons/pet.
+
+* the people with lowest absenteeism hours don't have sons/pets almost, oldest.
+
+Anyway, the clusters are confused.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(clmSpearm$pamobject$clustering)
+table(clmSpearm$pamobject$clustering, AbsenteeismCont$Hoursgroup)
+table(clmSpearm$pamobject$clustering, AbsenteeismCont$Absenteeism.time.in.hours)
+#table(clmSpearm$pamobject$clustering, AbsenteeismCont$Freq.absence)
+```
+
+Considering the reason:
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table( Absenteeism_Clustering$Reason.for.absence.short,clmSpearm$pamobject$clustering)
+
+```
+Comparing with K.means:
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(Absenteeism_Clustering$Reason.for.absence.short,AbsenteeismCont$clusterKM )
+
+``` 
+
+They don't agree.
+
+* K-MEDOIDS with 7 clusters
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+library(fpc)
+clmSpearm7=pamk(dSpearm, k=7, criterion="asw", usepam=TRUE,
+         scaling=FALSE, alpha=0.001, diss=TRUE,
+         critout=FALSE, ns=10, seed=NULL) 
+
+```
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(clmSpearm7$pamobject$clustering)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+clmKen7=pamk(dKend, k=7, criterion="asw", usepam=TRUE,
+         scaling=FALSE, alpha=0.001, diss=TRUE,
+         critout=FALSE, ns=10, seed=NULL) 
+
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(clmKen7$pamobject$clustering)
+```
+
+Proceeding doing the same things we did for k-means.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+
+AbsenteeismCont$clusterKMed7<-as.factor(clmSpearm7$pamobject$clustering)
+#str(AbsenteeismCont)
+summary(aov(AbsenteeismCont[,1]~AbsenteeismCont$clusterKMed7,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,2]~AbsenteeismCont$clusterKMed7,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,3]~AbsenteeismCont$clusterKMed7,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,4]~AbsenteeismCont$clusterKMed7,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,5]~AbsenteeismCont$clusterKMed7,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,6]~AbsenteeismCont$clusterKMed7,data=AbsenteeismCont)) 
+summary(aov(AbsenteeismCont[,7]~AbsenteeismCont$clusterKMed7,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,8]~AbsenteeismCont$clusterKMed7,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,9]~AbsenteeismCont$clusterKMed7,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,10]~AbsenteeismCont$clusterKMed7,data=AbsenteeismCont)) 
+summary(aov(AbsenteeismCont[,11]~AbsenteeismCont$clusterKMed7,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,12]~AbsenteeismCont$clusterKMed7,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,13]~AbsenteeismCont$clusterKMed7,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,14]~AbsenteeismCont$clusterKMed7,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,15]~AbsenteeismCont$clusterKMed7,data=AbsenteeismCont))
+summary(aov(AbsenteeismCont[,16]~AbsenteeismCont$clusterKMed7,data=AbsenteeismCont))
+
+
+```
+
+The belonging of the clustering is significant for all the variables in this case, also for absenteeism time in hours!
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+CL_Means_KMed7<-matrix(rep(0,(7*16)),nrow=16)
+#str(AbsenteeismCont)
+#dim(AbsenteeismCont)
+rownames(CL_Means_KMed7)<-names(AbsenteeismCont)[-c(17:30)]
+colnames(CL_Means_KMed7)<-c("CL1","CL2","CL3","CL4","CL5","CL6","CL7")
+
+CL_Means_KMed7[,1]<-round(colMeans(subset(AbsenteeismCont,clusterKMed7==1)[,-c(17:30)]),2) 
+CL_Means_KMed7[,2]<-round(colMeans(subset(AbsenteeismCont,clusterKMed7==2)[,-c(17:30)]),2)
+CL_Means_KMed7[,3]<-round(colMeans(subset(AbsenteeismCont,clusterKMed7==3)[,-c(17:30)]),2)
+CL_Means_KMed7[,4]<-round(colMeans(subset(AbsenteeismCont,clusterKMed7==4)[,-c(17:30)]),2) 
+CL_Means_KMed7[,5]<-round(colMeans(subset(AbsenteeismCont,clusterKMed7==5)[,-c(17:30)]),2)
+CL_Means_KMed7[,6]<-round(colMeans(subset(AbsenteeismCont,clusterKMed7==6)[,-c(17:30)]),2)
+CL_Means_KMed7[,7]<-round(colMeans(subset(AbsenteeismCont,clusterKMed7==7)[,-c(17:30)]),2)
+CL_Means_KMed7
+
+```
+
+CL1: Lowest distance, oldest, highest freq.failure
+
+CL2: Highest numbers of hours.load.day
+
+CL3: with more sons, highest number of hours
+
+CL4: highest service time, no sons/pets, most height
+
+CL5: lowest freq.failure
+
+CL6: lowest service time, youngest, lowest BMI
+
+CL7: lowest transportation expense, no pets, lowest number of hours
+
+The results are similar for the high number of hours but sometimes, different in the description of high number of hours. The clusters are still confused also with 7 groups.
+
+```{r}
+fviz_cluster(object=list(data=AbsenteeismCont_Norm_presel, cluster=clmSpearm7$pamobject$clustering), repel=TRUE, show.clust.cent=TRUE , palette="NULL",ggthem=theme_minimal(), main="K-medoids with Spearman Distance of the PC", geom=c("point"), ellipse=TRUE)
+
+```
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(clmSpearm7$pamobject$clustering)
+table(clmSpearm7$pamobject$clustering, AbsenteeismCont$Hoursgroup)
+table(clmSpearm7$pamobject$clustering, AbsenteeismCont$Absenteeism.time.in.hours)
+```
+
+Considering the reason:
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table( Absenteeism_Clustering$Reason.for.absence.short,clmSpearm7$pamobject$clustering)
+
+```
+
+
+
+###Clustering with the original variables
+
+We tried to perform the clustering analysis with the original variables, pre-selected and standardized and we obtain the same messy results (see Annex)
+
+
+###Dataset's creation with unique IDs
+At this point, we think it could be interesting to create a new data set from the original one with the IDs not duplicated.
+
+New variables created/transformed:
+* Sum.Absenteeism.time.in.hours 
+
+* Avg.Absenteeism.time.in.hours  
+
+* Avg.Hour.Work.load.Average.day 
+
+* Sum.Number.of.days.absent 
+
+* Avg.Number.of.days.absent  
+
+* Avg.Hit.target
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#str(Absenteeism_withcatnames)
+Absenteeism_ClusteringID=Absenteeism_withcatnames
+
+Absenteeism_ClusteringID$ID=as.factor(Absenteeism_ClusteringID$ID)   #to check to have all the IDs
+#str(Absenteeism_ClusteringID ) #739 obs 36 IDs
+
+Absenteeism_ClusteringID=subset(Absenteeism_ClusteringID, select=-c(Day.of.the.week.nom, Month.of.absence.nom, Seasons.nom, Reason.for.absence, Month.of.absence,Day.of.the.week,Seasons,Work.load.Average.day,  Social.drinker, Social.smoker, Body.mass.index, Reason.for.absence.short
+) ) 
+#deleting some variables that they change for the same ID
+
+#str(Absenteeism_ClusteringID)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+##Making the 'UNIQUE ID DATASET'
+#Unique DataSet with the removed 40 lines (cause we don't want to sum to work load hours of those ones)
+
+UniqueIDwithoutfailures <- Absenteeism_ClusteringID[!(Absenteeism_ClusteringID$Disciplinary.failure==1),]
+str(UniqueIDwithoutfailures)  #700 obs 36 IDs
+
+
+##Absenteeism.time.in.hours
+#sum the hours missed per ID to have the amount of missed work throughout the 3 years
+library(Hmisc)
+sumvalue <- summarize(UniqueIDwithoutfailures$Absenteeism.time.in.hours,UniqueIDwithoutfailures$ID,sum)
+sumvalue <- as.matrix(cbind(Sum.Absenteeism.time.in.hours=sumvalue[,2], ID=sumvalue[,1]))
+
+#average the hours missed per ID to have the amount of missed work throughout the 3 years
+avgvalue <- summarize(UniqueIDwithoutfailures$Absenteeism.time.in.hours,UniqueIDwithoutfailures$ID,mean)
+avgvalue <- as.matrix(cbind(Avg.Absenteeism.time.in.hours=avgvalue[,2], ID=avgvalue[,1]))
+
+#MERGE 1
+Absenteeism_complete_UniqueID <- merge(sumvalue,avgvalue,by="ID",all.y=TRUE)
+
+#Average.Hour.load.Average.day
+avgvalue2 <- summarize(UniqueIDwithoutfailures$Hour.Work.load.Average.day,UniqueIDwithoutfailures$ID,mean)
+avgvalue2 <- as.matrix(cbind(Avg.Hour.Work.load.Average.day=avgvalue2[,2], ID=avgvalue2[,1]))
+
+#MERGE 2
+Absenteeism_complete_UniqueID <- merge(Absenteeism_complete_UniqueID,avgvalue2,by="ID",all.y=TRUE)
+
+#Sum Number.of.days.absent
+sumvalue2 <- summarize(UniqueIDwithoutfailures$Number.of.days.absent,UniqueIDwithoutfailures$ID,sum)
+sumvalue2 <- as.matrix(cbind(Sum.Number.of.days.absent=sumvalue2[,2], ID=sumvalue2[,1]))
+
+#MERGE 3
+Absenteeism_complete_UniqueID <- merge(Absenteeism_complete_UniqueID,sumvalue2,by="ID",all.y=TRUE)
+
+#Avg Number.of.days.absent
+avgvalue3 <- summarize(UniqueIDwithoutfailures$Number.of.days.absent,UniqueIDwithoutfailures$ID,mean)
+avgvalue3  <- as.matrix(cbind(Avg.Number.of.days.absent=avgvalue3[,2], ID=avgvalue3[,1]))
+
+#MERGE 4
+Absenteeism_complete_UniqueID <- merge(Absenteeism_complete_UniqueID,avgvalue3,by="ID",all.y=TRUE)
+
+#Average Hit Target
+avgvalue4 <- summarize(UniqueIDwithoutfailures$Hit.target,UniqueIDwithoutfailures$ID,mean)
+avgvalue4  <- as.matrix(cbind(Avg.Hit.target=avgvalue4[,2], ID=avgvalue4[,1]))
+
+#MERGE 5
+Absenteeism_complete_UniqueID <- merge(Absenteeism_complete_UniqueID,avgvalue4,by="ID",all.y=TRUE)
+
+#take the duplicates of Transportation.expense, Distance.from.Residence.to.Work, Service.time, Age, Education, Son, Social.drinker, Social.smoker, Bad.habits, Pet, Weight, Height, Body mass index, Freq.absence
+UniqueID_dup <- subset(Absenteeism_ClusteringID, select=c("ID","Transportation.expense","Distance.from.Residence.to.Work", "Service.time", "Age", "Education", "Son", "Bad.habits", "Pet", "Weight", "Height", "BMI", "Freq.absence", "Freq.failure"))
+without_dup <- unique (UniqueID_dup)
+
+#MERGE 6
+Absenteeism_complete_UniqueID <- merge(Absenteeism_complete_UniqueID,without_dup,by="ID",all.y=TRUE)
+
+#NA in the freq.absence NA is 0.
+library(car)
+Absenteeism_complete_UniqueID$Freq.absence<-Recode(Absenteeism_complete_UniqueID$Freq.absence, "NA='0'")
+
+```
+
+Absenteeism_complete_UniqueID is our new data set.
+
+####Reason and goals of the clustering analysis for the UniqueID dataset
+
+We would like to perform a clustering to describe Freq.absence with the variables in our disposal.
+The data set analyzed is with 36 IDs and with 21 variables.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absenteeism_complete_UniqueID$ID=as.factor(Absenteeism_complete_UniqueID$ID)
+
+#new variables as in the full dataset
+Absenteeism_complete_UniqueID$First.start <- Absenteeism_complete_UniqueID$Age-Absenteeism_complete_UniqueID$Service.time
+
+str(Absenteeism_complete_UniqueID)
+```
+
+
+####Histograms and boxplots of the new dataset
+To understand the distribution of this new data set, but we will not detect outliers since we want to study all the 36IDs.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+par(mfrow=c(2,1))
+
+barplot(table(Absenteeism_complete_UniqueID$Education),col = 'lavender' )
+
+barplot(table(Absenteeism_complete_UniqueID$Bad.habits), col = 'lavender')
+
+```
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+par(mfrow=c(3,2))
+
+hist( Absenteeism_complete_UniqueID$Transportation.expense, breaks = sqrt( length( Absenteeism_complete_UniqueID$Transportation.expense ) ), probability = TRUE,
+      col = 'lavender', main = 'Transportation.expense', xlab = 'Transportation.expense' ) 
+boxplot(Absenteeism_complete_UniqueID$Transportation.expense) 
+
+
+hist( Absenteeism_complete_UniqueID$Distance.from.Residence.to.Work, breaks = sqrt( length( Absenteeism_complete_UniqueID$Distance.from.Residence.to.Work ) ), probability = TRUE,
+      col = 'lavender', main = 'Distance.from.Residence.to.Work', xlab = 'Distance.from.Residence.to.Work' ) 
+boxplot(Absenteeism_complete_UniqueID$Distance.from.Residence.to.Work)
+
+
+hist( Absenteeism_complete_UniqueID$Service.time, breaks = sqrt( length( Absenteeism_complete_UniqueID$Service.time ) ), probability = TRUE,
+      col = 'lavender', main = 'Service.time', xlab = 'Service.time' ) 
+boxplot(Absenteeism_complete_UniqueID$Service.time) 
+
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+par(mfrow=c(3,2))
+
+hist( Absenteeism_complete_UniqueID$Age, breaks = sqrt( length( Absenteeism_complete_UniqueID$Age ) ), probability = TRUE,
+      col = 'lavender', main = 'Age', xlab = 'Age' ) 
+boxplot(Absenteeism_complete_UniqueID$Age) 
+
+
+hist( Absenteeism_complete_UniqueID$Son, breaks = sqrt( length( Absenteeism_complete_UniqueID$Son ) ), probability = TRUE,
+      col = 'lavender', main = 'Son', xlab = 'Son' )
+boxplot(Absenteeism_complete_UniqueID$Son)
+
+hist( Absenteeism_complete_UniqueID$Pet, breaks = sqrt( length( Absenteeism_complete_UniqueID$Pet ) ), probability = TRUE,
+      col = 'lavender', main = 'Pet', xlab = 'Pet' ) 
+boxplot(Absenteeism_complete_UniqueID$Pet)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+par(mfrow=c(3,2))
+
+hist( Absenteeism_complete_UniqueID$Weight, breaks = sqrt( length( Absenteeism_complete_UniqueID$Weight ) ), probability = TRUE,
+      col = 'lavender', main = 'Weight', xlab = 'Weight' ) 
+boxplot(Absenteeism_complete_UniqueID$Weight)
+
+hist( Absenteeism_complete_UniqueID$Height, breaks = sqrt( length( Absenteeism_complete_UniqueID$Height ) ), probability = TRUE,
+      col = 'lavender', main = 'Height', xlab = 'Height' ) 
+boxplot(Absenteeism_complete_UniqueID$Height)# ID 14, 30, 29, 18, 12, 36, 25, 31
+
+hist( Absenteeism_complete_UniqueID$BMI, breaks = sqrt( length( Absenteeism_complete_UniqueID$BMI ) ), probability = TRUE,
+      col = 'lavender', main = 'BMI', xlab = 'BMI' )
+boxplot(Absenteeism_complete_UniqueID$BMI)
+```
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+par(mfrow=c(3,2))
+
+hist( Absenteeism_complete_UniqueID$Freq.absence, breaks = sqrt( length( Absenteeism_complete_UniqueID$Freq.absence) ), probability = TRUE,
+      col = 'lavender', main = 'Freq.absence', xlab = 'Freq.absence' ) 
+boxplot(Absenteeism_complete_UniqueID$Freq.absence)
+
+#ID 3 (112) AND ID 28 (72) have really high freq.absence
+
+hist( Absenteeism_complete_UniqueID$Freq.failure, breaks = sqrt( length( Absenteeism_complete_UniqueID$Freq.failure ) ), probability = TRUE,
+      col = 'lavender', main = 'Freq.failure', xlab = 'Freq.failure' )
+boxplot(Absenteeism_complete_UniqueID$Freq.failure) #ID 36
+
+#plot(Absenteeism_complete_UniqueID$Freq.absence, Absenteeism_complete_UniqueID$Freq.failure) to understand if the same people with freq absence high also have freq failure high, but no!
+
+hist( Absenteeism_complete_UniqueID$First.start, breaks = sqrt( length( Absenteeism_complete_UniqueID$First.start ) ), probability = TRUE,
+      col = 'lavender', main = 'First.start', xlab = 'First.start' ) 
+boxplot(Absenteeism_complete_UniqueID$First.start) #id 9 , 31
+```
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+par(mfrow=c(3,2))
+
+hist( Absenteeism_complete_UniqueID$Sum.Absenteeism.time.in.hours, breaks = sqrt( length( Absenteeism_complete_UniqueID$Sum.Absenteeism.time.in.hours ) ), probability = TRUE,
+      col = 'lavender', main = 'Sum.Absenteeism.time.in.hours', xlab = 'Sum.Absenteeism.time.in.hours' ) 
+boxplot(Absenteeism_complete_UniqueID$Sum.Absenteeism.time.in.hours)
+
+
+
+hist( Absenteeism_complete_UniqueID$Avg.Absenteeism.time.in.hours, breaks = sqrt( length( Absenteeism_complete_UniqueID$Avg.Absenteeism.time.in.hours ) ), probability = TRUE,
+      col = 'lavender', main = 'Avg.Absenteeism.time.in.hours', xlab = 'Avg.Absenteeism.time.in.hours' ) 
+boxplot(Absenteeism_complete_UniqueID$Avg.Absenteeism.time.in.hours)
+
+#plot(Absenteeism_complete_UniqueID$Avg.Absenteeism.time.in.hours,Absenteeism_complete_UniqueID$Freq.absence ) #to understand if the one with high freq are also the one with avg hours absenteim high, but no!
+
+
+hist( Absenteeism_complete_UniqueID$Avg.Hour.Work.load.Average.day, breaks = sqrt( length( Absenteeism_complete_UniqueID$Avg.Hour.Work.load.Average.day ) ), probability = TRUE,
+      col = 'lavender', main = 'Avg.Hour.Work.load.Average.day', xlab = 'Avg.Hour.Work.load.Average.day' ) 
+boxplot(Absenteeism_complete_UniqueID$Avg.Hour.Work.load.Average.day)
+
+
+#plot(Absenteeism_complete_UniqueID$Freq.absence,Absenteeism_complete_UniqueID$Avg.Hour.Work.load.Average.day) to understand if freq absence high means also workloadaverage low, but no!
+#plot(Absenteeism_complete_UniqueID$Avg.Absenteeism.time.in.hours,Absenteeism_complete_UniqueID$Avg.Hour.Work.load.Average.day) tounderstand if avg abse hours high means also avg hour load average day low, but no!
+
+```
+
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+par(mfrow=c(3,2))
+
+hist( Absenteeism_complete_UniqueID$Sum.Number.of.days.absent, breaks = sqrt( length( Absenteeism_complete_UniqueID$Sum.Number.of.days.absent ) ), probability = TRUE,
+      col = 'lavender', main = 'Sum.Number.of.days.absent', xlab = 'Sum.Number.of.days.absent' ) 
+boxplot(Absenteeism_complete_UniqueID$Sum.Number.of.days.absent)
+
+
+hist( Absenteeism_complete_UniqueID$Avg.Number.of.days.absent, breaks = sqrt( length( Absenteeism_complete_UniqueID$Avg.Number.of.days.absent ) ), probability = TRUE,
+      col = 'lavender', main = 'Avg.Number.of.days.absent', xlab = 'Avg.Number.of.days.absent' ) 
+boxplot(Absenteeism_complete_UniqueID$Avg.Number.of.days.absent)
+
+#plot(Absenteeism_complete_UniqueID$Avg.Number.of.days.absent,Absenteeism_complete_UniqueID$Sum.Number.of.days.absent ) to control if high sum corresponds to high avg, but since doesn't happen with the hours doesn't happen also with the days
+
+
+hist( Absenteeism_complete_UniqueID$Avg.Hit.target, breaks = sqrt( length( Absenteeism_complete_UniqueID$Avg.Hit.target ) ), probability = TRUE,
+      col = 'lavender', main = 'Avg.Hit.target', xlab = 'Avg.Hit.target' ) 
+boxplot(Absenteeism_complete_UniqueID$Avg.Hit.target)
+```
+
+We expect high correlation between the sum of Absenteeism time in hours and Freq absence:
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+plot(Absenteeism_complete_UniqueID$Sum.Absenteeism.time.in.hours,Absenteeism_complete_UniqueID$Freq.absence )
+abline(lm(Absenteeism_complete_UniqueID$Freq.absence~Absenteeism_complete_UniqueID$Sum.Absenteeism.time.in.hours, data=Absenteeism_complete_UniqueID))
+
+cor(Absenteeism_complete_UniqueID$Sum.Absenteeism.time.in.hours,Absenteeism_complete_UniqueID$Freq.absence) 
+cor(Absenteeism_complete_UniqueID$Sum.Absenteeism.time.in.hours,Absenteeism_complete_UniqueID$Freq.absence, method="spearman")
+
+```
+And the Spear man correlation higher than Pearson suggested that probably there is not only a linear correlation but this could be due to some outliers (verified) in absenteeism.time.in.hours.
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#Absenteeism_complete_UniqueID$Freq.absence, Absenteeism_complete_UniqueID$Freq.failure,Absenteeism_complete_UniqueID$Avg.Hour.Work.load.Average.day, Absenteeism_complete_UniqueID$Avg.Absenteeism.time.in.hours to have a global view
+
+require(car)
+matr=subset(Absenteeism_complete_UniqueID, select=c(Freq.absence, Freq.failure,Avg.Hour.Work.load.Average.day, Avg.Absenteeism.time.in.hours,Sum.Absenteeism.time.in.hours))
+
+
+pairs(matr)
+#scatterplotMatrix(matr)
+
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+require(scatterplot3d)
+scatterplot3d(Absenteeism_complete_UniqueID$Freq.failure, Absenteeism_complete_UniqueID$Avg.Hour.Work.load.Average.day, Absenteeism_complete_UniqueID$Sum.Absenteeism.time.in.hours, xlab='Freq.failure',ylab='Hour.Work.load.Average.day',zlab='Sum.Absenteeism.time.in.hours')
+
+```
+
+####Correlation analysis
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#str(Absenteeism_complete_UniqueID)
+Absenteeism_complete_UniqueIDCon=subset(Absenteeism_complete_UniqueID, select=-c(ID,Education, Bad.habits))
+str(Absenteeism_complete_UniqueIDCon) #18 variables
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absenteeism_complete_UniqueIDConStand=scale(Absenteeism_complete_UniqueIDCon)
+
+
+corvarPearson <- round(cor(Absenteeism_complete_UniqueIDConStand),2)
+corvarPearson[corvarPearson > -0.5 & corvarPearson < 0.5] <- NA
+#View(corvarPearson)
+
+corvarSpearm <- round(cor(Absenteeism_complete_UniqueIDConStand),2)
+corvarSpearm[corvarSpearm > -0.5 & corvarSpearm < 0.5] <- NA
+#View(corvarSpearm)
+
+library(corrplot)
+par(mfrow=c(1,2))
+CorrMatrix1 <- data.matrix(Absenteeism_complete_UniqueIDConStand)
+corrplot(cor(CorrMatrix1), diag = FALSE, order = "FPC", tl.pos = "td", tl.cex = 0.7, method = "color", type = "upper",number.cex = .6)
+
+corrplot(cor(CorrMatrix1, method="spearman"), diag = FALSE, order = "FPC", tl.pos = "td", tl.cex = 0.7, method = "color", type = "upper",number.cex = .6)
+
+
+
+```
+
+
+Freq.absence and sum absenteeism.time.in.hours Pears 0.82
+
+Sum.Number.of.days.absent and Freq.absence Pears 0.82
+
+Sum.Absenteeism.time.in.hours and Sum.Number.of.days.absent Pears 1
+
+Avg.Number.of.days.absent and Avg.Absenteeism.time.in.hours Pears 0.99
+
+Age and First.start Pears 0.74
+
+Age and service time Pears 0.63
+
+Weight and BMI Pears 0.91
+
+
+Because of that we will consider the hours and not the days, first and and service time and not the age, and we will not consider neither the freq neither the sum of days absent because the goal of the cluster is to describe the freq.absence and we will not give as inputs its and sum.abs.hours and sum.abs.days since we want the cluster created without its information. 
+We will check at the end, if it is possible to check a pattern of the clusters with the freq absence!
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absenteeism_complete_UniqueIDConStand_sel=subset(Absenteeism_complete_UniqueIDConStand, select=-c(Age,Weight,Sum.Number.of.days.absent, Sum.Absenteeism.time.in.hours, Freq.absence, Avg.Number.of.days.absent))
+Absenteeism_complete_UniqueIDConStand_sel=as.data.frame(Absenteeism_complete_UniqueIDConStand_sel)
+str(Absenteeism_complete_UniqueIDConStand_sel) #12 variables
+
+```
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#check no correlation
+corvarPearson <- round(cor(Absenteeism_complete_UniqueIDConStand_sel),2)
+corvarPearson[corvarPearson > -0.5 & corvarPearson < 0.5] <- NA
+#View(corvarPearson)
+
+corvarSpearm <- round(cor(Absenteeism_complete_UniqueIDConStand_sel),2)
+corvarSpearm[corvarSpearm > -0.5 & corvarSpearm < 0.5] <- NA
+#View(corvarSpearm)
+```
+
+####Principal Components UniqueID
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+xnormID.pca <- princomp(Absenteeism_complete_UniqueIDConStand_sel,cor=TRUE, scores = TRUE) #scores=TRUE
+summary(xnormID.pca) #to compare with PCA command
+
+#considering the % of variance explained, screeplot
+#plot(xnormID.pca, type = "l")
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+
+library("FactoMineR")
+resID.pca=PCA(Absenteeism_complete_UniqueIDConStand_sel, ncp = 13, graph = FALSE)
+library("factoextra")
+
+fviz_eig(resID.pca, addlabels = TRUE, ylim = c(0, 50))
+
+```
+And in particular:
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+eigID.val <- get_eigenvalue(resID.pca)
+eigID.val
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#code to save the scores that we will need later in the clustering analysis maybe
+matID=xnormID.pca$scores
+#dim(mat)
+#matcomp9ID=matID[, 1:9]
+matcomp10ID=matID[, 1:10]
+```
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+xnormID.pca$loadings #results princcomp command. NB: the compenents are standardized! we can consider the loading relatively to the component but not absolutely. it is normal that SS loadings is equal to 1
+```
+
+Considering the loadings and its interpretation, looking to the histograms contribution:
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# Contributions of variables to PC1
+fviz_contrib(resID.pca, choice = "var", axes = 1, top = 12)
+# Contributions of variables to PC2
+fviz_contrib(resID.pca, choice = "var", axes = 2, top = 12)
+
+fviz_contrib(resID.pca, choice = "var", axes = 3, top = 13)
+
+fviz_contrib(resID.pca, choice = "var", axes = 4, top = 12)
+
+fviz_contrib(resID.pca, choice = "var", axes = 5, top = 12)
+
+fviz_contrib(resID.pca, choice = "var", axes = 6, top = 12)
+
+fviz_contrib(resID.pca, choice = "var", axes = 7, top = 12)
+
+fviz_contrib(resID.pca, choice = "var", axes = 8, top = 12)
+
+fviz_contrib(resID.pca, choice = "var", axes = 9, top = 12)
+
+fviz_contrib(resID.pca, choice = "var", axes = 10, top = 12)
+
+fviz_contrib(resID.pca, choice = "var", axes = 11, top = 12)
+
+fviz_contrib(resID.pca, choice = "var", axes = 12, top = 12)
+
+
+
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+
+library("corrplot")
+corrplot(resID.pca$var$contrib, is.corr=FALSE)
+```
+```{r}
+fviz_contrib(resID.pca, choice = "var", axes = 1:10, top = 12)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+library("corrplot")
+corrplot(resID.pca$var$cos2, is.corr=FALSE)
+```
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# Total cos2 of variables on Dim.1/ dim 9
+fviz_cos2(resID.pca, choice = "var", axes = 1:10)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# Color by cos2 values: quality on the factor map
+fviz_pca_var(resID.pca, col.var = "cos2",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), 
+             repel = TRUE # Avoid text overlapping
+             )
+
+```
+
+
+
+####Factor Analysis UniqueID
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Rid=cor(Absenteeism_complete_UniqueIDConStand_sel)
+library(psych) 
+KMO(Rid)
+```
+
+We will not go ahead because the overall MSA is 0.37.
+
+
+####Clustering Analysis Unique ID
+Since the data set is small and there is no variability we will continue to use the distances rank based.
+
+####Number of clusters
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+library("NbClust")
+library(FactoMineR)
+library(factoextra)
+# Elbow method
+fviz_nbclust(matcomp10ID, hcut, method = "wss", diss=get_dist(matcomp10ID, method="spearman")) +
+    #geom_vline(xintercept = 4, linetype = 2)+
+  labs(subtitle = "Elbow method")
+```
+
+6 is the number suggested.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# Silhouette method
+fviz_nbclust(matcomp10ID, hcut, method = "silhouette", diss=get_dist(matcomp10ID, method="spearman")) +
+    #geom_vline(xintercept = 4, linetype = 2)+
+  labs(subtitle = "silhouette")
+```
+
+2 is the number suggested.
+
+We will proceed with two and/or six.
+
+
+* K-medoids 2 clusters
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# Kendall and Spearman 
+library(factoextra)
+
+dSpearmID=get_dist(matcomp10ID, method = "spearman")
+
+dKendID=get_dist(matcomp10ID, method = "kendall")
+
+
+library(fpc)
+clmSpearm2ID=pamk(dSpearmID, k=2, criterion="asw", usepam=TRUE,
+         scaling=FALSE, alpha=0.001, diss=TRUE,
+         critout=FALSE, ns=10, seed=NULL) 
+
+table(clmSpearm2ID$pamobject$clustering)
+
+table(clmSpearm2ID$pamobject$clustering, Absenteeism_complete_UniqueID$Freq.absence)
+
+```
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absenteeism_complete_UniqueIDConStand_sel$clusterKMed2<-as.factor(clmSpearm2ID$pamobject$clustering)
+#str(Absenteeism_complete_UniqueIDConStand_sel)
+
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,1]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed2,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,2]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed2,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,3]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed2,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,4]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed2,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,5]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed2,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,6]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed2,data=Absenteeism_complete_UniqueIDConStand_sel)) 
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,7]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed2,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,8]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed2,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,9]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed2,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,10]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed2,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,11]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed2,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,12]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed2,data=Absenteeism_complete_UniqueIDConStand_sel))
+
+
+#str(Absenteeism_complete_UniqueIDCon)
+summary(aov(Absenteeism_complete_UniqueIDCon[,16]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed2,data=Absenteeism_complete_UniqueIDConStand_sel))
+
+
+```
+Service.time and Son are the only variable for which is significant the belonging at the clusters or not.
+
+Freq.absence has p-value 0.275, high.
+
+```{r}
+fviz_cluster(object=list(data=Absenteeism_complete_UniqueIDConStand_sel[,1:12], cluster=clmSpearm2ID$pamobject$clustering), repel=TRUE, show.clust.cent=TRUE , palette="NULL",ggthem=theme_minimal(), main="K-medoids with Spearman Distance of the PC", geom=c("point"), ellipse=TRUE)
+```
+
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+
+clmSpearm6ID=pamk(dSpearmID, k=6, criterion="asw", usepam=TRUE,
+         scaling=FALSE, alpha=0.001, diss=TRUE,
+         critout=FALSE, ns=10, seed=NULL) 
+
+table(clmSpearm6ID$pamobject$clustering)
+
+table(clmSpearm6ID$pamobject$clustering, Absenteeism_complete_UniqueID$Freq.absence)
+
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+Absenteeism_complete_UniqueIDConStand_sel$clusterKMed6<-as.factor(clmSpearm2ID$pamobject$clustering)
+#str(Absenteeism_complete_UniqueIDConStand_sel)
+
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,1]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed6,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,2]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed6,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,3]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed6,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,4]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed6,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,5]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed6,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,6]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed6,data=Absenteeism_complete_UniqueIDConStand_sel)) 
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,7]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed6,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,8]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed6,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,9]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed6,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,10]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed6,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,11]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed6,data=Absenteeism_complete_UniqueIDConStand_sel))
+summary(aov(Absenteeism_complete_UniqueIDConStand_sel[,12]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed6,data=Absenteeism_complete_UniqueIDConStand_sel))
+
+
+#str(Absenteeism_complete_UniqueIDCon)
+summary(aov(Absenteeism_complete_UniqueIDCon[,16]~Absenteeism_complete_UniqueIDConStand_sel$clusterKMed6,data=Absenteeism_complete_UniqueIDConStand_sel))
+
+```
+
+Same as number of clusters equals to 2.
+
+The clusters with high frequencies have also some obs with low frequencies: what this means? it is impossible to catch a pattern also with 6 clusters (a lot, since the number of rows are 36) !
+
+
+#### MCA for freq.absence for UniqueID
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+str(Absenteeism_complete_UniqueID)
+par(mfrow=c(2,1))
+
+hist( Absenteeism_complete_UniqueID$Freq.absence, breaks = sqrt( length( Absenteeism_complete_UniqueID$Freq.absence) ), probability = TRUE,
+      col = 'lavender', main = 'Freq.absence', xlab = 'Freq.absence' ) 
+boxplot(Absenteeism_complete_UniqueID$Freq.absence)
+
+#discretize freq absence
+Absenteeism_complete_UniqueID$Freq.absenceBin<-Recode(Absenteeism_complete_UniqueID$Freq.absence,"0:20='VeryLow';20:40='Mid';40:120='High'")
+table (Absenteeism_complete_UniqueID$Freq.absenceBin)
+UniqIDcat=subset(Absenteeism_complete_UniqueID, select=c(Education, Bad.habits, Freq.absenceBin))
+```
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+tab1=table(UniqIDcat$Education, UniqIDcat$Bad.habits)
+chisq.test(tab1)
+
+tab2=table(UniqIDcat$Education,UniqIDcat$Freq.absenceBin )
+chisq.test(tab2)
+
+tab3=table(UniqIDcat$Bad.habits, UniqIDcat$Freq.absenceBin)
+chisq.test(tab3)
+```
+
+seems there are no relations, we will not go ahead.
+
+
+###Annex
+
+####Clustering analysis with original variables
+
+Without PCA! Original and standardized variables.
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#str(AbsenteeismCont_Norm_presel)
+library("NbClust")
+library(FactoMineR)
+library(factoextra)
+# Elbow method
+fviz_nbclust(AbsenteeismCont_Norm_presel, hcut, method = "wss", diss=get_dist(AbsenteeismCont_Norm_presel, method="spearman")) +
+    #geom_vline(xintercept = 4, linetype = 2)+
+  labs(subtitle = "Elbow method")
+```
+
+Elbow in 3 or in 6 or in 7.
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# Silhouette method
+fviz_nbclust(AbsenteeismCont_Norm_presel, hcut, method = "silhouette", diss=get_dist(AbsenteeismCont_Norm_presel, method="spearman") )+
+  labs(subtitle = "Silhouette method")
+```
+
+ 
+Let's try 3 and 7
+##Clustering algorithms
+ 
+ 
+###Hierarchical
+The distance will be apply to the original and standardized variables.
+We chose 3 as number of clusters with the distance of Spearman and 7 as number of clusters with the distance of Kendall.
+
+NB. run this file after the cluster with pca otherwise will be a messy
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+#d<-dist(matcomp9)
+
+# Kendall and Spearman 
+library(factoextra)
+
+dSpearmOr=get_dist(AbsenteeismCont_Norm_presel, method = "spearman")
+
+dKendOr=get_dist(AbsenteeismCont_Norm_presel, method = "kendall")
+
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+fviz_dist(dSpearmOr)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+fviz_dist(dKendOr)
+```
+
+* WARD METHOD
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+fit_ward<-hclust(dSpearmOr,method="ward.D")
+plot(fit_ward)
+rect.hclust(fit_ward, k=3,border="red") 
+groups_wardSpearmOr <- cutree(fit_ward, k=3)
+
+AbsenteeismCont$groups_wardSpearmOr<-groups_wardSpearmOr  #create the column the the clusters of ward
+table(groups_wardSpearmOr)
+table(AbsenteeismCont$Hoursgroup,AbsenteeismCont$groups_wardSpearmOr)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,AbsenteeismCont$groups_wardSpearmOr)
+
+```
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+
+fit_ward<-hclust(dKendOr,method="ward.D")
+plot(fit_ward)
+rect.hclust(fit_ward, k=7,border="red") 
+groups_wardKendOr <- cutree(fit_ward, k=7)
+
+AbsenteeismCont$groups_wardKendOr<-groups_wardKendOr  #create the column the the clusters of ward
+table(groups_wardKendOr)
+table(AbsenteeismCont$Hoursgroup,AbsenteeismCont$groups_wardKendOr)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,AbsenteeismCont$groups_wardKendOr)
+
+```
+
+
+ 
+* SINGLE LINKAGE
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# single linkage
+fit_single<-hclust(dSpearmOr, method="single")
+plot(fit_single)
+rect.hclust(fit_single, k=3, border="red")
+groups_singleSpearmOr <- cutree(fit_single, k=3)
+AbsenteeismCont$groups_singleSpearmOr<-groups_singleSpearmOr
+table(groups_singleSpearmOr) 
+table(AbsenteeismCont$Hoursgroup,groups_singleSpearmOr)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,AbsenteeismCont$groups_singleSpearmOr)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# single linkage
+fit_single<-hclust(dKendOr, method="single")
+plot(fit_single)
+rect.hclust(fit_single, k=7, border="red")
+groups_singleKendOr <- cutree(fit_single, k=7)
+AbsenteeismCont$groups_singleKendOr<-groups_singleKendOr
+table(groups_singleKendOr) 
+table(AbsenteeismCont$Hoursgroup,groups_singleKendOr)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,AbsenteeismCont$groups_singleKendOr)
+```
+
+
+* COMPLETE LINKAGE
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# complete linkage
+fit_complete<-hclust(dSpearmOr, method="complete")
+plot(fit_complete)
+rect.hclust(fit_complete, k=3, border="red")
+groups_completeSpearmOr <- cutree(fit_complete, k=3)
+AbsenteeismCont$groups_completeSpearmOr<-groups_completeSpearmOr
+
+table(groups_completeSpearmOr) 
+table(AbsenteeismCont$Hoursgroup,groups_completeSpearmOr)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,groups_completeSpearmOr)
+```
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# complete linkage
+fit_complete<-hclust(dKendOr, method="complete")
+plot(fit_complete)
+rect.hclust(fit_complete, k=7, border="red")
+groups_completeKendOr <- cutree(fit_complete, k=7)
+AbsenteeismCont$groups_completeKendOr<-groups_completeKendOr
+
+table(groups_completeKendOr) 
+table(AbsenteeismCont$Hoursgroup,groups_completeKendOr)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,groups_completeKendOr)
+```
+
+* AVERAGE LINKAGE
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# average linkage
+fit_average<-hclust(dSpearmOr, method="average")
+plot(fit_average)
+rect.hclust(fit_average, k=3, border="red")
+groups_averageSpearmOr <- cutree(fit_average, k=3)
+table(groups_averageSpearmOr) 
+AbsenteeismCont$groups_averageSpearmOr<-groups_averageSpearmOr
+ 
+table(AbsenteeismCont$Hoursgroup,groups_averageSpearmOr)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,groups_averageSpearmOr)
+```
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# average linkage
+fit_average<-hclust(dKendOr, method="average")
+plot(fit_average)
+rect.hclust(fit_average, k=7, border="red")
+groups_averageKendOr <- cutree(fit_average, k=7)
+table(groups_averageKendOr) 
+AbsenteeismCont$groups_averageKendOr<-groups_averageKendOr
+ 
+table(AbsenteeismCont$Hoursgroup,groups_averageKendOr)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,groups_averageKendOr)
+```
+
+* CENTROID LINKAGE
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# centroid method
+fit_centroid<-hclust(dSpearmOr, method="centroid")
+plot(fit_centroid)
+rect.hclust(fit_centroid, k=3, border="red")
+groups_centroidSpearmOr <- cutree(fit_centroid, k=3)
+table(groups_centroidSpearmOr)
+
+AbsenteeismCont$groups_centroidSpearmOr<-groups_centroidSpearmOr
+ 
+table(AbsenteeismCont$Hoursgroup,groups_centroidSpearmOr)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,groups_centroidSpearmOr)
+```
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+# centroid method
+fit_centroid<-hclust(dKendOr, method="centroid")
+plot(fit_centroid)
+rect.hclust(fit_centroid, k=7, border="red")
+groups_centroidKendOr <- cutree(fit_centroid, k=7)
+table(groups_centroidKendOr)
+
+AbsenteeismCont$groups_centroidKendOr<-groups_centroidKendOr
+ 
+table(AbsenteeismCont$Hoursgroup,groups_centroidKendOr)
+table(Absenteeism_Clustering$Absenteeism.time.in.hours,groups_centroidKendOr)
+```
+
+
+###Partitioning algorithms
+
+* K-MEANS
+ 
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+clkOr=kmeans(AbsenteeismCont_Norm_presel, 3, iter.max = 100, nstart =2365 ,    
+           algorithm = c("Hartigan-Wong", "Lloyd", "Forgy", "MacQueen"),  trace=FALSE)
+
+#clkOr
+
+
+```
+
+
+Looking that between_SS / total_SS =  29.6 %
+
+ 
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+AbsenteeismCont$clusterKMOr<-as.factor(clkOr$cluster)
+table(AbsenteeismCont$clusterKMOr,AbsenteeismCont$Hoursgroup)
+table(AbsenteeismCont$clusterKMOr,AbsenteeismCont$Absenteeism.time.in.hours)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(Absenteeism_Clustering$Reason.for.absence.short,AbsenteeismCont$clusterKMOr )
+
+```
+
+
+* K-MEDOIDS 3 clusters with sperman distance
+
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+library(fpc)
+clmSpearmOr=pamk(dSpearmOr, k=3, criterion="asw", usepam=TRUE,
+         scaling=FALSE, alpha=0.001, diss=TRUE,
+         critout=FALSE, ns=10, seed=NULL) 
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(clmSpearmOr$pamobject$clustering)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+
+AbsenteeismCont$clusterKMedOr<-as.factor(clmSpearmOr$pamobject$clustering)
+
+
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(clmSpearmOr$pamobject$clustering)
+table(clmSpearmOr$pamobject$clustering, AbsenteeismCont$Hoursgroup)
+table(clmSpearmOr$pamobject$clustering, AbsenteeismCont$Absenteeism.time.in.hours)
+#table(clmSpearmOr$pamobject$clustering, AbsenteeismCont$Freq.absence)
+```
+
+Considering the reason:
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table( Absenteeism_Clustering$Reason.for.absence.short,clmSpearmOr$pamobject$clustering)
+
+```
+
+```{r}
+#clmSpearmOr$pamobject$clustering=as.factor(clmSpearmOr$pamobject$clustering)
+#str(AbsenteeismCont_Norm_presel)
+fviz_cluster(object=list(data=AbsenteeismCont_Norm_presel[,1:12], cluster=clmSpearmOr$pamobject$clustering), repel=TRUE, show.clust.cent=TRUE , palette="NULL",ggthem=theme_minimal(), main="K-medoids with Spearman Distance of the PC", geom=c("point"), ellipse=TRUE)
+```
+
+* K-MEDOIDS with 7 clusters and Kendall's distance
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+clmKenOr=pamk(dKendOr, k=7, criterion="asw", usepam=TRUE,
+         scaling=FALSE, alpha=0.001, diss=TRUE,
+         critout=FALSE, ns=10, seed=NULL) 
+
+
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(clmKenOr$pamobject$clustering)
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+
+AbsenteeismCont$clusterKMedOr<-as.factor(clmKenOr$pamobject$clustering)
+
+
+```
+
+```{r eval=TRUE, warning=FALSE, message=FALSE}
+table(clmKenOr$pamobject$clustering)
+table(clmKenOr$pamobject$clustering, AbsenteeismCont$Hoursgroup)
+table(clmKenOr$pamobject$clustering, AbsenteeismCont$Absenteeism.time.in.hours)
+table(clmKenOr$pamobject$clustering, AbsenteeismCont$Freq.absence)
+```
+
+
+
+
+
